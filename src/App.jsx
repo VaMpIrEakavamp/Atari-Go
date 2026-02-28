@@ -59,9 +59,16 @@ if (firebaseConfig.apiKey) {
   }
 }
 
-const appId = 'atari-go-production-v1';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const SIZE = 9;
 const KOMI = 6.5;
+
+const getPlayerName = (u) => {
+  if (!u) return "Unknown";
+  if (u.displayName) return u.displayName;
+  if (u.email) return u.email.split('@')[0];
+  return `Guest_${u.uid.substring(0, 4)}`;
+};
 
 const i18n = {
   en: {
@@ -154,6 +161,16 @@ export default function App() {
   // --- 1. AUTH LISTENER ---
   useEffect(() => {
     if (!auth) return;
+
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       if (u) {
@@ -177,7 +194,7 @@ export default function App() {
         if (snap.exists()) {
           const data = snap.data();
           let role = null;
-          const name = user.displayName || user.email.split('@')[0];
+          const name = getPlayerName(user);
           
           // Re-join if already in the room, else take empty slot
           if (data.player1Id === user.uid) {
@@ -447,7 +464,7 @@ export default function App() {
     const newRoomId = Math.random().toString(36).substring(2, 9);
     const hostIsBlack = Math.random() > 0.5; // Randomize Host Color
     const assignedRole = hostIsBlack ? 1 : 2;
-    const name = user.displayName || user.email.split('@')[0];
+    const name = getPlayerName(user);
 
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
     
@@ -563,7 +580,7 @@ export default function App() {
         {roomId && user && (
             <div className="mb-4 flex items-center gap-2 px-3 py-1 bg-indigo-50 border border-indigo-100 rounded-full text-[10px] text-indigo-700 font-bold">
                 <User size={10} />
-                <span>{(user.displayName || user.email || "Player").split('@')[0]} ({playerRole === 1 ? t.black : t.white})</span>
+                <span>{getPlayerName(user)} ({playerRole === 1 ? t.black : t.white})</span>
                 <span className="opacity-30">|</span>
                 <span className="flex items-center gap-1 font-black"><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> ONLINE</span>
             </div>
