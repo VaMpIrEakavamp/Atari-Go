@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { 
   Instagram, RotateCcw, ChevronRight, Undo2, Trophy, 
   Swords, Zap, Layout, Globe, Copy, User, CheckCircle2, 
-  LogIn, LogOut, Mail, Lock, ShieldCheck, AlertCircle
+  LogIn, LogOut, Mail, Lock, ShieldCheck, AlertCircle, XCircle, Award
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -10,28 +10,24 @@ import {
   createUserWithEmailAndPassword, signOut, updateProfile,
   signInAnonymously, signInWithCustomToken
 } from 'firebase/auth';
-import { getFirestore, doc, onSnapshot, updateDoc, setDoc, getDoc } from 'firebase/firestore';
+import { getFirestore, doc, onSnapshot, updateDoc, setDoc, getDoc, collection, increment } from 'firebase/firestore';
 
 /**
  * --- SECURE CONFIGURATION LOADER ---
- * Updated to support individual VITE_ environment variables.
- * This ensures compatibility with Vercel and local environments.
  */
 const getFirebaseConfig = () => {
   const globalEnv = typeof process !== 'undefined' ? process.env : {};
   let viteEnv = {};
-  try {
-    viteEnv = import.meta.env;
-  } catch (e) {}
+  try { viteEnv = import.meta.env; } catch (e) {}
 
   const config = {
     apiKey: viteEnv?.VITE_FIREBASE_API_KEY || globalEnv?.VITE_FIREBASE_API_KEY || "",
-    authDomain: viteEnv?.VITE_FIREBASE_AUTH_DOMAIN || globalEnv?.VITE_FIREBASE_AUTH_DOMAIN || "atari-go-business.firebaseapp.com",
-    projectId: viteEnv?.VITE_FIREBASE_PROJECT_ID || globalEnv?.VITE_FIREBASE_PROJECT_ID || "atari-go-business",
-    storageBucket: viteEnv?.VITE_FIREBASE_STORAGE_BUCKET || globalEnv?.VITE_FIREBASE_STORAGE_BUCKET || "atari-go-business.firebasestorage.app",
-    messagingSenderId: viteEnv?.VITE_FIREBASE_MESSAGING_SENDER_ID || globalEnv?.VITE_FIREBASE_MESSAGING_SENDER_ID || "591839384619",
-    appId: viteEnv?.VITE_FIREBASE_APP_ID || globalEnv?.VITE_FIREBASE_APP_ID || "1:591839384619:web:bc655a26ebd84d6328466e",
-    measurementId: viteEnv?.VITE_FIREBASE_MEASUREMENT_ID || globalEnv?.VITE_FIREBASE_MEASUREMENT_ID || "G-TR6BTT42WN"
+    authDomain: viteEnv?.VITE_FIREBASE_AUTH_DOMAIN || globalEnv?.VITE_FIREBASE_AUTH_DOMAIN || "",
+    projectId: viteEnv?.VITE_FIREBASE_PROJECT_ID || globalEnv?.VITE_FIREBASE_PROJECT_ID || "",
+    storageBucket: viteEnv?.VITE_FIREBASE_STORAGE_BUCKET || globalEnv?.VITE_FIREBASE_STORAGE_BUCKET || "",
+    messagingSenderId: viteEnv?.VITE_FIREBASE_MESSAGING_SENDER_ID || globalEnv?.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+    appId: viteEnv?.VITE_FIREBASE_APP_ID || globalEnv?.VITE_FIREBASE_APP_ID || "",
+    measurementId: viteEnv?.VITE_FIREBASE_MEASUREMENT_ID || globalEnv?.VITE_FIREBASE_MEASUREMENT_ID || ""
   };
 
   if (!config.apiKey && typeof __firebase_config !== 'undefined' && __firebase_config) {
@@ -45,7 +41,6 @@ const getFirebaseConfig = () => {
   return config;
 };
 
-// --- GLOBAL SERVICES INIT ---
 const firebaseConfig = getFirebaseConfig();
 let app, auth, db;
 
@@ -85,7 +80,9 @@ const i18n = {
     localMode: "Local Mode", loginTitle: "Enter the Dojo", email: "Email Address", password: "Password",
     username: "Username", signIn: "Sign In", signUp: "Create Account", noAccount: "New player? Register",
     hasAccount: "Already a master? Login", authError: "Authentication Failed. Please check your credentials.",
-    waiting: "Waiting..."
+    waiting: "Waiting...", gameOverTitle: "Match Finished!", rematch: "Play Again", exitOnline: "Exit Mode",
+    leaderboard: "Leaderboard", rank: "Rank", wins: "Wins", total: "Total", classic: "Classic", kill: "Kill",
+    mustLoginToJoin: "Please log in or register to join the match!"
   },
   pt: {
     title: "Atari GO (9x9)", black: "Preto", white: "Branco", territory: "Território", caps: "Capturas",
@@ -101,7 +98,9 @@ const i18n = {
     localMode: "Modo Local", loginTitle: "Entrar no Dojo", email: "E-mail", password: "Senha",
     username: "Usuário", signIn: "Entrar", signUp: "Criar Conta", noAccount: "Novo jogador? Registre-se",
     hasAccount: "Já é um mestre? Login", authError: "Falha na autenticação.",
-    waiting: "Aguardando..."
+    waiting: "Aguardando...", gameOverTitle: "Fim de Jogo!", rematch: "Jogar Novamente", exitOnline: "Sair do Modo",
+    leaderboard: "Placar", rank: "Posição", wins: "Vitórias", total: "Total", classic: "Clássico", kill: "Kill",
+    mustLoginToJoin: "Faça login ou registre-se para entrar na partida!"
   }
 };
 
@@ -124,6 +123,34 @@ const Logo = () => (
   </div>
 );
 
+// --- CONFETTI COMPONENT ---
+const Confetti = () => {
+  const colors = ['bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500', 'bg-purple-500', 'bg-pink-500'];
+  return (
+    <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-3xl z-0">
+      {[...Array(60)].map((_, i) => (
+        <div 
+          key={i} 
+          className={`absolute w-3 h-3 rounded-sm opacity-80 ${colors[i % colors.length]}`} 
+          style={{
+            left: `${Math.random() * 100}%`,
+            top: `-5%`,
+            animation: `fall ${2 + Math.random() * 3}s linear infinite`,
+            animationDelay: `${Math.random() * 2}s`,
+            transform: `rotate(${Math.random() * 360}deg)`
+          }}
+        />
+      ))}
+      <style>{`
+        @keyframes fall {
+          0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+          100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -131,6 +158,7 @@ export default function App() {
   const [authForm, setAuthForm] = useState({ email: '', password: '', username: '' });
   const [authLoading, setAuthLoading] = useState(false);
   const [authErrorMsg, setAuthErrorMsg] = useState('');
+  const [dbError, setDbError] = useState('');
 
   const [board, setBoard] = useState(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
   const [currentPlayer, setCurrentPlayer] = useState(1);
@@ -147,19 +175,30 @@ export default function App() {
   const [playerRole, setPlayerRole] = useState(null); 
   const [isCopied, setIsCopied] = useState(false);
   
-  // New state to hold dynamic usernames
   const [playerNames, setPlayerNames] = useState({ 1: '', 2: '' });
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+
+  // --- LEADERBOARD STATE ---
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [leaderboardData, setLeaderboardData] = useState([]);
+  const [leaderboardSort, setLeaderboardSort] = useState('total'); // 'total', 'classic', 'kill'
 
   const t = i18n[lang];
 
   const showFlashMessage = useCallback((msg) => {
     if (!msg) return;
     setMessage(msg);
-    setTimeout(() => setMessage(''), 3000);
   }, []);
 
-  // --- 1. AUTH LISTENER ---
+  // Clear flash message timer
+  useEffect(() => {
+    if (message && !isGameOver) {
+      const timer = setTimeout(() => setMessage(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [message, isGameOver]);
+
+  // --- AUTH LISTENER ---
   useEffect(() => {
     if (!auth) return;
 
@@ -167,7 +206,11 @@ export default function App() {
       if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
         await signInWithCustomToken(auth, __initial_auth_token);
       } else {
-        await signInAnonymously(auth);
+        try {
+          await signInAnonymously(auth);
+        } catch (e) {
+          console.error("Anonymous auth disabled:", e);
+        }
       }
     };
     initAuth();
@@ -182,43 +225,54 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- 2. URL JOIN LISTENER (NEW ADDON) ---
+  // --- URL JOIN LISTENER ---
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlRoomId = params.get('room');
     
     if (urlRoomId && !roomId && user && db) {
+      // NEW RULE: If user is an anonymous guest, force them to log in before joining
+      if (user.isAnonymous) {
+        setAuthErrorMsg(t.mustLoginToJoin);
+        setIsAuthModalOpen(true);
+        return;
+      }
+
       const joinExistingRoom = async () => {
-        const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', urlRoomId);
-        const snap = await getDoc(roomRef);
-        
-        if (snap.exists()) {
-          const data = snap.data();
-          let role = null;
-          const name = getPlayerName(user);
+        try {
+          const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', urlRoomId);
+          const snap = await getDoc(roomRef);
           
-          // Re-join if already in the room, else take empty slot
-          if (data.player1Id === user.uid) {
-            role = 1;
-          } else if (data.player2Id === user.uid) {
-            role = 2;
-          } else if (!data.player1Id) {
-            role = 1;
-            await updateDoc(roomRef, { player1Id: user.uid, player1Name: name });
-          } else if (!data.player2Id) {
-            role = 2;
-            await updateDoc(roomRef, { player2Id: user.uid, player2Name: name });
+          if (snap.exists()) {
+            const data = snap.data();
+            let role = null;
+            const name = getPlayerName(user);
+            
+            if (data.player1Id === user.uid) {
+              role = 1;
+            } else if (data.player2Id === user.uid) {
+              role = 2;
+            } else if (!data.player1Id) {
+              role = 1;
+              await updateDoc(roomRef, { player1Id: user.uid, player1Name: name });
+            } else if (!data.player2Id) {
+              role = 2;
+              await updateDoc(roomRef, { player2Id: user.uid, player2Name: name });
+            }
+            
+            setRoomId(urlRoomId);
+            setPlayerRole(role);
           }
-          
-          setRoomId(urlRoomId);
-          setPlayerRole(role);
+        } catch (error) {
+          console.error("Join Room Error:", error);
+          setDbError("Unable to join room. Please verify your Firestore Database Security Rules.");
         }
       };
       joinExistingRoom();
     }
-  }, [user, roomId, db]);
+  }, [user, roomId, db, t.mustLoginToJoin]);
 
-  // --- 3. FIRESTORE SYNC & NAME UPDATES ---
+  // --- FIRESTORE SYNC & NAME UPDATES ---
   useEffect(() => {
     if (!user || !roomId || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
@@ -227,7 +281,6 @@ export default function App() {
       if (snapshot.exists()) {
         const data = snapshot.data();
         
-        // Update the dynamic names from the database
         setPlayerNames({
           1: data.player1Name || t.waiting,
           2: data.player2Name || t.waiting
@@ -243,15 +296,66 @@ export default function App() {
           if (data.message) showFlashMessage(data.message);
         }
       }
-    }, (error) => console.error("Sync error:", error));
+    }, (error) => {
+      console.error("Sync error:", error);
+      setDbError("Lost connection to the room. Database read permission denied.");
+    });
     return () => unsubscribe();
   }, [user, roomId, showFlashMessage, t.waiting]);
+
+  // --- LEADERBOARD SYNC ---
+  useEffect(() => {
+    if (!showLeaderboard || !db) return;
+    const lbCol = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
+    
+    const unsub = onSnapshot(lbCol, (snapshot) => {
+      const data = [];
+      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+      setLeaderboardData(data);
+    }, (error) => {
+      console.error("Leaderboard fetch error:", error);
+      setDbError("Unable to fetch leaderboard. Permission denied.");
+    });
+    
+    return () => unsub();
+  }, [showLeaderboard, db]);
+
+  const sortedLeaderboard = useMemo(() => {
+    return [...leaderboardData].sort((a, b) => {
+      if (leaderboardSort === 'classic') return (b.classicWins || 0) - (a.classicWins || 0);
+      if (leaderboardSort === 'kill') return (b.killWins || 0) - (a.killWins || 0);
+      return (b.totalWins || 0) - (a.totalWins || 0);
+    });
+  }, [leaderboardData, leaderboardSort]);
+
+  const updateLeaderboard = useCallback(async (mode) => {
+    if (!user || !db) return;
+    const lbRef = doc(db, 'artifacts', appId, 'public', 'data', 'leaderboard', user.uid);
+    try {
+      const snap = await getDoc(lbRef);
+      if (snap.exists()) {
+        await updateDoc(lbRef, {
+          [mode + 'Wins']: increment(1),
+          totalWins: increment(1),
+          displayName: getPlayerName(user)
+        });
+      } else {
+        await setDoc(lbRef, {
+          displayName: getPlayerName(user),
+          classicWins: mode === 'classic' ? 1 : 0,
+          killWins: mode === 'kill' ? 1 : 0,
+          totalWins: 1
+        });
+      }
+    } catch (e) {
+      console.error("Failed to update leaderboard rank:", e);
+    }
+  }, [user, db]);
 
   const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "") => {
     if (!roomId || !user || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
     try {
-      // updateDoc only modifies the specific fields, leaving names intact
       await updateDoc(roomRef, {
         board: JSON.stringify(newBoard),
         currentPlayer: nextPlayer,
@@ -265,6 +369,7 @@ export default function App() {
       });
     } catch (e) {
       console.error("Cloud sync failed", e);
+      setDbError("Move not saved! Database write permission denied.");
     }
   }, [roomId, user, gameMode]);
 
@@ -348,10 +453,12 @@ export default function App() {
     
     if (captured.length === 0 && findGroupAndLiberties(testBoard, r, c).liberties.length === 0) {
       showFlashMessage(t.suicideMsg);
+      setTimeout(() => setMessage(''), 3000); 
       return;
     }
     if (JSON.stringify(testBoard) === lastBoardState) {
       showFlashMessage(t.koMsg);
+      setTimeout(() => setMessage(''), 3000); 
       return;
     }
     
@@ -367,6 +474,11 @@ export default function App() {
       const winnerName = playerNames[currentPlayer] || (currentPlayer === 1 ? t.black : t.white);
       winMsg = t.killWin.replace('{winner}', winnerName);
       showFlashMessage(winMsg);
+
+      // ONLY THE WINNER UPDATES THEIR RANK
+      if (roomId && playerRole === currentPlayer) {
+        updateLeaderboard('kill');
+      }
     }
     
     setBoard(newBoard);
@@ -375,7 +487,7 @@ export default function App() {
     setPassCount(0);
     setCurrentPlayer(opponent);
     if (roomId) syncToCloud(newBoard, opponent, newCaptures, gameOver, 0, winMsg);
-  }, [board, isGameOver, playerRole, currentPlayer, findCaptures, findGroupAndLiberties, lastBoardState, captures, gameMode, t, roomId, syncToCloud, showFlashMessage, playerNames]);
+  }, [board, isGameOver, playerRole, currentPlayer, findCaptures, findGroupAndLiberties, lastBoardState, captures, gameMode, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
   const handlePass = useCallback(() => {
     if (isGameOver || (playerRole && currentPlayer !== playerRole)) return;
@@ -389,8 +501,15 @@ export default function App() {
       gameOver = true;
       const b = scoreData.blackTerritory + captures[1];
       const w = scoreData.whiteTerritory + captures[2] + KOMI;
+      const winnerRole = b > w ? 1 : 2;
       const winner = b > w ? (playerNames[1] || t.black) : (playerNames[2] || t.white);
       passMsg = t.gameOver.replace('{winner}', winner).replace('{b}', b.toFixed(1)).replace('{w}', w.toFixed(1));
+
+      // ONLY THE WINNER UPDATES THEIR RANK
+      if (roomId && playerRole === winnerRole) {
+        updateLeaderboard('classic');
+      }
+
     } else {
       const pName = playerNames[currentPlayer] || (currentPlayer === 1 ? t.black : t.white);
       passMsg = t.passedMsg.replace('{player}', pName);
@@ -401,10 +520,9 @@ export default function App() {
     setIsGameOver(gameOver);
     setCurrentPlayer(nextPlayer);
     if (roomId) syncToCloud(board, nextPlayer, captures, gameOver, nextPass, passMsg);
-  }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames]);
+  }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
   const resetGame = useCallback(() => {
-    // Only active participants can reset an online game.
     if (roomId && !playerRole) return; 
     
     const emptyBoard = Array(SIZE).fill(null).map(() => Array(SIZE).fill(0));
@@ -416,9 +534,24 @@ export default function App() {
     setIsGameOver(false);
     setShowResetModal(false);
     showFlashMessage(t.resetNotify);
+    setTimeout(() => setMessage(''), 3000);
     
-    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, t.resetNotify);
+    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "");
   }, [roomId, playerRole, t, showFlashMessage, syncToCloud]);
+
+  const handleExitOnline = useCallback(() => {
+    setRoomId(null);
+    setPlayerRole(null);
+    window.history.replaceState({}, '', window.location.pathname);
+    
+    setBoard(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
+    setCurrentPlayer(1);
+    setCaptures({ 1: 0, 2: 0 });
+    setHistory([]);
+    setPassCount(0);
+    setIsGameOver(false);
+    setMessage('');
+  }, []);
 
   const undoMove = useCallback(() => {
     if (history.length === 0 || isGameOver || !!roomId) return; 
@@ -429,6 +562,7 @@ export default function App() {
     setLastBoardState(last.lastBoardState);
     setHistory(prev => prev.slice(0, -1));
     showFlashMessage(t.undoNotify);
+    setTimeout(() => setMessage(''), 3000);
   }, [history, isGameOver, roomId, t, showFlashMessage]);
 
   const handleAuth = async (e) => {
@@ -440,11 +574,11 @@ export default function App() {
       if (authMode === 'signup') {
         const cred = await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
         await updateProfile(cred.user, { displayName: authForm.username });
-        setUser({ ...cred.user, displayName: authForm.username }); // Force name update in UI
+        setUser({ ...cred.user, displayName: authForm.username }); 
       } else {
         await signInWithEmailAndPassword(auth, authForm.email, authForm.password);
       }
-      setIsAuthModalOpen(false); // Force close modal on success
+      setIsAuthModalOpen(false); 
     } catch (err) {
       setAuthErrorMsg(t.authError);
     } finally {
@@ -455,28 +589,25 @@ export default function App() {
   const handleSignOut = useCallback(async () => {
     if (auth) {
       await signOut(auth);
-      await signInAnonymously(auth); // Fallback to guest so online play still works
+      await signInAnonymously(auth); 
     }
-    setRoomId(null);
-    setPlayerRole(null);
-    resetGame();
-  }, [resetGame]);
+    handleExitOnline();
+  }, [handleExitOnline]);
 
-  // --- 4. START ROOM WITH RANDOM ROLE (NEW ADDON) ---
   const startOnlineRoom = async () => {
+    setDbError(''); 
     if (!user) { setIsAuthModalOpen(true); return; }
-    if (!db) { showFlashMessage("Database connecting..."); return; }
+    if (!db) { setDbError("Database is not connected."); return; }
     
     setIsCreatingRoom(true);
     try {
       const newRoomId = Math.random().toString(36).substring(2, 9);
-      const hostIsBlack = Math.random() > 0.5; // Randomize Host Color
+      const hostIsBlack = Math.random() > 0.5; 
       const assignedRole = hostIsBlack ? 1 : 2;
       const name = getPlayerName(user);
 
       const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
       
-      // Create the document with names and IDs
       await setDoc(roomRef, {
         board: JSON.stringify(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0))),
         currentPlayer: 1, 
@@ -497,20 +628,22 @@ export default function App() {
       resetGame();
     } catch (error) {
       console.error("Room creation failed:", error);
-      showFlashMessage("Error creating room. Please try again!");
+      if (error.code === 'permission-denied') {
+        setDbError("Permission Denied: Your Firestore rules are blocking writes. Please go to your Firebase Console -> Firestore -> Rules, and set them to allow read/write.");
+      } else {
+        setDbError(`Database Error: ${error.message}. Please ensure Firestore is initialized in your Firebase Console.`);
+      }
     } finally {
       setIsCreatingRoom(false);
     }
   };
 
-  // --- 5. MODERN COPY API (NEW ADDON) ---
   const copyRoomLink = async () => {
     const link = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(link);
       } else {
-        // Fallback for older browsers
         const textArea = document.createElement("textarea");
         textArea.value = link;
         document.body.appendChild(textArea);
@@ -525,18 +658,14 @@ export default function App() {
     }
   };
 
-  // --- EMERGENCY UI (Prevents White Screen) ---
-  if (!firebaseConfig.apiKey) {
+  if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-6 text-center">
         <AlertCircle size={48} className="text-red-500 mb-4" />
-        <h1 className="text-2xl font-black mb-2 uppercase tracking-tighter">Technical Outage</h1>
+        <h1 className="text-2xl font-black mb-2 uppercase tracking-tighter">Configuration Error</h1>
         <p className="text-gray-400 text-sm max-w-xs mb-6">
-          The application is missing its production credentials. Ensure Vercel environment variables are set and redeployed.
+          You are missing required Firebase Environment Variables. Ensure both <b>VITE_FIREBASE_API_KEY</b> and <b>VITE_FIREBASE_PROJECT_ID</b> are set in your .env file!
         </p>
-        <div className="p-4 bg-gray-800 rounded-xl text-[10px] font-mono text-left w-full max-w-sm overflow-x-auto">
-          ERR: CFG_MISSING_API_KEY
-        </div>
       </div>
     );
   }
@@ -554,18 +683,30 @@ export default function App() {
                     </button>
                 ))}
             </div>
-            <div className="flex bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                {['en', 'pt'].map(l => (
-                    <button key={l} onClick={() => setLang(l)} className={`px-3 py-1.5 text-[10px] font-bold transition-colors ${lang === l ? 'bg-blue-600 text-white' : 'hover:bg-gray-50 text-gray-600'}`}>
-                      {l.toUpperCase()}
-                    </button>
-                ))}
+            
+            <div className="flex gap-2">
+                <button onClick={() => setShowLeaderboard(true)} className="flex items-center justify-center px-2 py-1.5 bg-yellow-100 text-yellow-600 rounded-lg shadow-sm border border-yellow-200 hover:bg-yellow-200 active:scale-95 transition-all">
+                    <Award size={14} className="mr-1" /> <span className="text-[10px] font-bold uppercase">{t.rank}</span>
+                </button>
+                <div className="flex bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                    {['en', 'pt'].map(l => (
+                        <button key={l} onClick={() => setLang(l)} className={`px-3 py-1.5 text-[10px] font-bold transition-colors ${lang === l ? 'bg-blue-600 text-white' : 'hover:bg-gray-50 text-gray-600'}`}>
+                          {l.toUpperCase()}
+                        </button>
+                    ))}
+                </div>
             </div>
         </div>
         
-        {/* --- NEW AUTH & ROOM CONTROLS UI --- */}
+        {dbError && (
+          <div className="w-full mb-2 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2 text-red-600 text-[10px] font-bold shadow-sm">
+            <AlertCircle size={14} className="mt-0.5 shrink-0" />
+            <span className="flex-1 leading-relaxed">{dbError}</span>
+            <button onClick={() => setDbError('')} className="text-red-400 hover:text-red-700 shrink-0"><XCircle size={14} /></button>
+          </div>
+        )}
+
         <div className="flex flex-col sm:flex-row gap-2 w-full justify-between items-center bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
-          {/* LEFT: Room Controls */}
           <div className="flex items-center gap-2">
             {!roomId ? (
               <button onClick={startOnlineRoom} disabled={isCreatingRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all disabled:opacity-50">
@@ -576,14 +717,13 @@ export default function App() {
                 <button onClick={copyRoomLink} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all">
                   {isCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />} {isCopied ? t.linkCopied : t.copyLink}
                 </button>
-                <button onClick={() => { setRoomId(null); setPlayerRole(null); resetGame(); window.history.replaceState({}, '', window.location.pathname); }} className="px-3 py-2 bg-gray-100 text-gray-600 rounded-lg text-xs font-bold hover:bg-red-50 hover:text-red-600 transition-all">
+                <button onClick={handleExitOnline} className="px-3 py-2 bg-gray-100 text-gray-600 rounded-lg text-xs font-bold hover:bg-red-50 hover:text-red-600 transition-all">
                   {t.localMode}
                 </button>
               </div>
             )}
           </div>
 
-          {/* RIGHT: User Profile / Auth */}
           <div className="flex items-center gap-2">
             {user && !user.isAnonymous ? (
               <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
@@ -602,7 +742,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="max-w-xl w-full bg-white rounded-2xl shadow-xl flex flex-col items-center p-3 sm:p-6 border border-gray-200">
+      <div className="max-w-xl w-full bg-white rounded-2xl shadow-xl flex flex-col items-center p-3 sm:p-6 border border-gray-200 relative">
         <Logo />
         {roomId && user && (
             <div className="mb-4 flex items-center gap-2 px-3 py-1 bg-indigo-50 border border-indigo-100 rounded-full text-[10px] text-indigo-700 font-bold">
@@ -613,7 +753,6 @@ export default function App() {
             </div>
         )}
         
-        {/* --- DYNAMIC SCOREBOARD --- */}
         <div className={`grid grid-cols-3 w-full mb-4 px-2 py-3 rounded-xl border border-gray-200 gap-1 transition-colors ${gameMode === 'kill' ? 'bg-red-50' : 'bg-gray-50'}`}>
           <div className="flex flex-col items-start min-w-0">
             <div className="flex items-center gap-1 mb-1">
@@ -662,7 +801,7 @@ export default function App() {
             </div>
         </div>
         <div className="h-6 mb-2 flex items-center justify-center text-center">
-            {message && <div className={`px-3 py-0.5 rounded-full text-[9px] font-bold shadow-sm animate-pulse text-white ${isGameOver ? 'bg-green-600' : 'bg-blue-600'}`}>{message}</div>}
+            {message && !isGameOver && <div className={`px-3 py-0.5 rounded-full text-[9px] font-bold shadow-sm animate-pulse text-white bg-blue-600`}>{message}</div>}
         </div>
         <div className="grid grid-cols-3 gap-2 w-full max-w-sm">
             <button onClick={undoMove} disabled={history.length === 0 || isGameOver || !!roomId} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><Undo2 size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.undoBtn}</span></button>
@@ -671,8 +810,82 @@ export default function App() {
         </div>
       </div>
 
+      {/* --- STYLISH FOOTER --- */}
+      <div className="mt-6 mb-4 flex flex-col items-center justify-center gap-2">
+          <span className="text-gray-400 text-[10px] font-bold uppercase tracking-widest">Created by OG</span>
+          <a 
+            href="https://www.instagram.com/0g_2k6?utm_source=ig_web_button_share_sheet&igsh=ZDNlZDc0MzIxNw==" 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-full shadow-sm text-gray-500 hover:text-white hover:bg-gradient-to-r hover:from-purple-500 hover:via-pink-500 hover:to-orange-500 hover:border-transparent transition-all duration-300 group"
+            title="Follow OG on Instagram"
+          >
+            <Instagram size={14} className="group-hover:scale-110 transition-transform duration-300" />
+            <span className="text-[11px] font-black tracking-wide">@0g_2k6</span>
+          </a>
+      </div>
+
+      {/* --- LEADERBOARD MODAL --- */}
+      {showLeaderboard && (
+        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-sm w-full animate-in zoom-in duration-300 flex flex-col max-h-[80vh]">
+            <div className="flex justify-between items-center mb-4">
+              <div className="flex items-center gap-2 text-yellow-600 font-black text-xl uppercase tracking-tighter">
+                <Trophy size={24} /> {t.leaderboard}
+              </div>
+              <button onClick={() => setShowLeaderboard(false)} className="text-gray-400 hover:text-red-500 active:scale-90 transition-transform"><XCircle size={24}/></button>
+            </div>
+            
+            <div className="flex bg-gray-100 p-1 rounded-xl mb-4 shrink-0">
+               {['total', 'classic', 'kill'].map(sortMode => (
+                  <button key={sortMode} onClick={() => setLeaderboardSort(sortMode)} className={`flex-1 py-1.5 text-[10px] font-black rounded-lg uppercase transition-all ${leaderboardSort === sortMode ? 'bg-white shadow-md text-indigo-600 scale-100' : 'text-gray-500 hover:bg-gray-200 scale-95'}`}>
+                      {t[sortMode]}
+                  </button>
+               ))}
+            </div>
+            
+            <div className="flex-1 overflow-y-auto pr-2 space-y-2">
+               {sortedLeaderboard.map((u, i) => (
+                  <div key={u.id} className={`flex items-center justify-between p-3 rounded-2xl border ${i === 0 ? 'bg-yellow-50 border-yellow-200 shadow-sm' : i === 1 ? 'bg-gray-50 border-gray-300' : i === 2 ? 'bg-orange-50 border-orange-200' : 'bg-white border-gray-100'}`}>
+                     <div className="flex items-center gap-3">
+                        <span className={`font-black text-xl w-6 text-center tracking-tighter ${i === 0 ? 'text-yellow-500' : i === 1 ? 'text-gray-400' : i === 2 ? 'text-orange-400' : 'text-gray-300 text-sm'}`}>#{i + 1}</span>
+                        <span className="font-bold text-sm text-gray-800 truncate max-w-[120px]">{u.displayName}</span>
+                     </div>
+                     <div className="text-right">
+                        <span className="block text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-100">{u[leaderboardSort + 'Wins'] || 0} {t.wins}</span>
+                     </div>
+                  </div>
+               ))}
+               {sortedLeaderboard.length === 0 && <p className="text-center text-gray-400 font-bold text-xs py-8 opacity-50">No ranked players yet.</p>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isGameOver && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <Confetti />
+          <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-sm w-full animate-in zoom-in slide-in-from-bottom-4 duration-500 relative z-10 flex flex-col items-center text-center">
+            <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center text-yellow-500 mb-4 shadow-inner animate-bounce">
+              <Trophy size={40} />
+            </div>
+            <h2 className="text-3xl font-black text-gray-900 mb-2 uppercase tracking-tighter">{t.gameOverTitle}</h2>
+            <p className="text-sm font-bold text-gray-600 mb-8 px-4 leading-relaxed">{message}</p>
+            
+            <div className="flex gap-3 w-full">
+              <button onClick={handleExitOnline} className="flex-1 py-3 bg-gray-100 border border-gray-200 text-gray-700 text-xs font-bold rounded-xl shadow-sm hover:bg-gray-200 active:scale-95 transition-all">
+                {t.exitOnline}
+              </button>
+              <button onClick={resetGame} disabled={roomId && !playerRole} className="flex-1 py-3 bg-green-500 text-white text-xs font-black uppercase rounded-xl shadow-lg shadow-green-200 hover:bg-green-600 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none">
+                {t.rematch}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isAuthModalOpen && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+          <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
               <div className="bg-white rounded-3xl shadow-2xl p-8 max-sm:p-6 max-w-sm w-full animate-in zoom-in duration-300">
                   <div className="flex flex-col items-center mb-6 text-center">
                       <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center text-indigo-600 mb-4"><ShieldCheck size={32} /></div>
@@ -704,7 +917,7 @@ export default function App() {
           </div>
       )}
       {showResetModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-[2px] p-4 text-center">
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/50 backdrop-blur-[2px] p-4 text-center">
             <div className="bg-white rounded-2xl shadow-2xl p-5 max-w-[280px] w-full animate-in zoom-in slide-in-from-bottom-2 duration-200">
                 <h3 className="text-base font-black mb-1 text-gray-900">{t.modalTitle}</h3>
                 <p className="text-gray-500 text-[10px] mb-6 leading-relaxed">{t.modalBody}</p>
