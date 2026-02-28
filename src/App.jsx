@@ -10,22 +10,17 @@ import {
   createUserWithEmailAndPassword, signOut, updateProfile,
   signInAnonymously, signInWithCustomToken
 } from 'firebase/auth';
-import { getFirestore, doc, onSnapshot, updateDoc, setDoc } from 'firebase/firestore';
+import { getFirestore, doc, onSnapshot, updateDoc, setDoc, getDoc } from 'firebase/firestore';
 
 /**
  * --- SECURE CONFIGURATION LOADER ---
  * Updated to support individual VITE_ environment variables.
- * This ensures compatibility with the Vercel variables shown in your screenshot.
+ * This ensures compatibility with Vercel and local environments.
  */
 const getFirebaseConfig = () => {
-  // 1. Check for individual variables first (This matches what you are setting in Vercel)
-  // We use a safe check to avoid the 'import.meta' warning in ES2015
   const globalEnv = typeof process !== 'undefined' ? process.env : {};
-  
-  // We try to access the Vite meta env safely
   let viteEnv = {};
   try {
-    // If this fails during build, the try-catch prevents the crash
     viteEnv = import.meta.env;
   } catch (e) {}
 
@@ -39,7 +34,6 @@ const getFirebaseConfig = () => {
     measurementId: viteEnv?.VITE_FIREBASE_MEASUREMENT_ID || globalEnv?.VITE_FIREBASE_MEASUREMENT_ID || "G-TR6BTT42WN"
   };
 
-  // 2. Production Fallback: Check for the single JSON string
   if (!config.apiKey && typeof __firebase_config !== 'undefined' && __firebase_config) {
     try {
       return typeof __firebase_config === 'string' ? JSON.parse(__firebase_config) : __firebase_config;
@@ -71,86 +65,36 @@ const KOMI = 6.5;
 
 const i18n = {
   en: {
-    title: "Atari GO (9x9)",
-    black: "Black",
-    white: "White",
-    territory: "Territory",
-    caps: "Captures",
-    pointsRemaining: "Remaining",
-    turnSuffix: "'s Turn",
-    passBtn: "Pass",
-    resetBtn: "Reset",
-    undoBtn: "Undo",
+    title: "Atari GO (9x9)", black: "Black", white: "White", territory: "Territory", caps: "Captures",
+    pointsRemaining: "Remaining", turnSuffix: "'s Turn", passBtn: "Pass", resetBtn: "Reset", undoBtn: "Undo",
     rules: "<b>Scoring:</b> Total = Territory + Captures. White gets 6.5 Komi.",
     killRules: "<b>Kill Mode:</b> First player to capture a stone wins instantly!",
-    modalTitle: "Reset Game?",
-    modalBody: "Clear board and scores? This cannot be undone.",
-    modalCancel: "Cancel",
-    modalConfirm: "Reset",
-    suicideMsg: "Suicide move blocked!",
-    koMsg: "Ko rule: Position repeat blocked.",
-    gameOver: "Game Over! {winner} wins {b} to {w}",
-    killWin: "Kill! {winner} captured a stone and wins!",
-    passedMsg: "{player} passed.",
-    resetNotify: "Game Reset",
-    undoNotify: "Undone",
-    modeClassic: "Classic Go",
-    modeKill: "Kill Mode",
-    playOnline: "Play Online",
-    copyLink: "Copy Link",
-    onlineAs: "Playing as:",
-    linkCopied: "Link Copied!",
-    localMode: "Local Mode",
-    loginTitle: "Enter the Dojo",
-    email: "Email Address",
-    password: "Password",
-    username: "Username",
-    signIn: "Sign In",
-    signUp: "Create Account",
-    noAccount: "New player? Register",
-    hasAccount: "Already a master? Login",
-    authError: "Authentication Failed. Please check your credentials."
+    modalTitle: "Reset Game?", modalBody: "Clear board and scores? This cannot be undone.",
+    modalCancel: "Cancel", modalConfirm: "Reset", suicideMsg: "Suicide move blocked!",
+    koMsg: "Ko rule: Position repeat blocked.", gameOver: "Game Over! {winner} wins {b} to {w}",
+    killWin: "Kill! {winner} captured a stone and wins!", passedMsg: "{player} passed.",
+    resetNotify: "Game Reset", undoNotify: "Undone", modeClassic: "Classic Go", modeKill: "Kill Mode",
+    playOnline: "Play Online", copyLink: "Copy Link", onlineAs: "Playing as:", linkCopied: "Link Copied!",
+    localMode: "Local Mode", loginTitle: "Enter the Dojo", email: "Email Address", password: "Password",
+    username: "Username", signIn: "Sign In", signUp: "Create Account", noAccount: "New player? Register",
+    hasAccount: "Already a master? Login", authError: "Authentication Failed. Please check your credentials.",
+    waiting: "Waiting..."
   },
   pt: {
-    title: "Atari GO (9x9)",
-    black: "Preto",
-    white: "Branco",
-    territory: "Território",
-    caps: "Capturas",
-    pointsRemaining: "Restante",
-    turnSuffix: " - Sua vez",
-    passBtn: "Passar",
-    resetBtn: "Reiniciar",
-    undoBtn: "Desfazer",
+    title: "Atari GO (9x9)", black: "Preto", white: "Branco", territory: "Território", caps: "Capturas",
+    pointsRemaining: "Restante", turnSuffix: " - Sua vez", passBtn: "Passar", resetBtn: "Reiniciar", undoBtn: "Desfazer",
     rules: "<b>Pontos:</b> Total = Território + Capturas. Branco recebe 6.5 Komi.",
     killRules: "<b>Modo Kill:</b> O primeiro a capturar uma peça vence instantaneamente!",
-    modalTitle: "Reiniciar?",
-    modalBody: "Limpar tabuleiro e pontos? Não pode ser desfeito.",
-    modalCancel: "Cancelar",
-    modalConfirm: "Confirmar",
-    suicideMsg: "Jogada suicida bloqueada!",
-    koMsg: "Regra Ko: Repetição bloqueada.",
-    gameOver: "Fim! {winner} vence por {b} a {w}",
-    killWin: "Kill! {winner} capturou uma peça e venceu!",
-    passedMsg: "{player} passou.",
-    resetNotify: "Reiniciado",
-    undoNotify: "Desfeito",
-    modeClassic: "Go Clássico",
-    modeKill: "Modo Kill",
-    playOnline: "Jogar Online",
-    copyLink: "Copiar Link",
-    onlineAs: "Jogando como:",
-    linkCopied: "Link Copiado!",
-    localMode: "Modo Local",
-    loginTitle: "Entrar no Dojo",
-    email: "E-mail",
-    password: "Senha",
-    username: "Usuário",
-    signIn: "Entrar",
-    signUp: "Criar Conta",
-    noAccount: "Novo jogador? Registre-se",
-    hasAccount: "Já é um mestre? Login",
-    authError: "Falha na autenticação."
+    modalTitle: "Reiniciar?", modalBody: "Limpar tabuleiro e pontos? Não pode ser desfeito.",
+    modalCancel: "Cancelar", modalConfirm: "Confirmar", suicideMsg: "Jogada suicida bloqueada!",
+    koMsg: "Regra Ko: Repetição bloqueada.", gameOver: "Fim! {winner} vence por {b} a {w}",
+    killWin: "Kill! {winner} capturou uma peça e venceu!", passedMsg: "{player} passou.",
+    resetNotify: "Reiniciado", undoNotify: "Desfeito", modeClassic: "Go Clássico", modeKill: "Modo Kill",
+    playOnline: "Jogar Online", copyLink: "Copiar Link", onlineAs: "Jogando como:", linkCopied: "Link Copiado!",
+    localMode: "Modo Local", loginTitle: "Entrar no Dojo", email: "E-mail", password: "Senha",
+    username: "Usuário", signIn: "Entrar", signUp: "Criar Conta", noAccount: "Novo jogador? Registre-se",
+    hasAccount: "Já é um mestre? Login", authError: "Falha na autenticação.",
+    waiting: "Aguardando..."
   }
 };
 
@@ -195,6 +139,9 @@ export default function App() {
   const [roomId, setRoomId] = useState(null);
   const [playerRole, setPlayerRole] = useState(null); 
   const [isCopied, setIsCopied] = useState(false);
+  
+  // New state to hold dynamic usernames
+  const [playerNames, setPlayerNames] = useState({ 1: '', 2: '' });
 
   const t = i18n[lang];
 
@@ -204,6 +151,7 @@ export default function App() {
     setTimeout(() => setMessage(''), 3000);
   }, []);
 
+  // --- 1. AUTH LISTENER ---
   useEffect(() => {
     if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -216,12 +164,57 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // --- 2. URL JOIN LISTENER (NEW ADDON) ---
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlRoomId = params.get('room');
+    
+    if (urlRoomId && !roomId && user && db) {
+      const joinExistingRoom = async () => {
+        const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', urlRoomId);
+        const snap = await getDoc(roomRef);
+        
+        if (snap.exists()) {
+          const data = snap.data();
+          let role = null;
+          const name = user.displayName || user.email.split('@')[0];
+          
+          // Re-join if already in the room, else take empty slot
+          if (data.player1Id === user.uid) {
+            role = 1;
+          } else if (data.player2Id === user.uid) {
+            role = 2;
+          } else if (!data.player1Id) {
+            role = 1;
+            await updateDoc(roomRef, { player1Id: user.uid, player1Name: name });
+          } else if (!data.player2Id) {
+            role = 2;
+            await updateDoc(roomRef, { player2Id: user.uid, player2Name: name });
+          }
+          
+          setRoomId(urlRoomId);
+          setPlayerRole(role);
+        }
+      };
+      joinExistingRoom();
+    }
+  }, [user, roomId, db]);
+
+  // --- 3. FIRESTORE SYNC & NAME UPDATES ---
   useEffect(() => {
     if (!user || !roomId || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
+    
     const unsubscribe = onSnapshot(roomRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
+        
+        // Update the dynamic names from the database
+        setPlayerNames({
+          1: data.player1Name || t.waiting,
+          2: data.player2Name || t.waiting
+        });
+
         if (data.lastMoveBy !== user.uid) {
           setBoard(JSON.parse(data.board));
           setCurrentPlayer(data.currentPlayer);
@@ -234,12 +227,13 @@ export default function App() {
       }
     }, (error) => console.error("Sync error:", error));
     return () => unsubscribe();
-  }, [user, roomId, showFlashMessage]);
+  }, [user, roomId, showFlashMessage, t.waiting]);
 
   const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "") => {
     if (!roomId || !user || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
     try {
+      // updateDoc only modifies the specific fields, leaving names intact
       await updateDoc(roomRef, {
         board: JSON.stringify(newBoard),
         currentPlayer: nextPlayer,
@@ -248,7 +242,6 @@ export default function App() {
         passCount: newPassCount,
         gameMode,
         lastMoveBy: user.uid,
-        lastMoveName: user.displayName || user.email,
         message: customMessage,
         updatedAt: Date.now()
       });
@@ -257,6 +250,7 @@ export default function App() {
     }
   }, [roomId, user, gameMode]);
 
+  // --- GAME LOGIC FUNCTIONS ---
   const findGroupAndLiberties = useCallback((tempBoard, r, c) => {
     const color = tempBoard[r][c];
     if (color === 0) return { group: [], liberties: [] };
@@ -333,6 +327,7 @@ export default function App() {
     const opponent = currentPlayer === 1 ? 2 : 1;
     const captured = findCaptures(testBoard, opponent);
     captured.forEach(pos => testBoard[pos.r][pos.c] = 0);
+    
     if (captured.length === 0 && findGroupAndLiberties(testBoard, r, c).liberties.length === 0) {
       showFlashMessage(t.suicideMsg);
       return;
@@ -341,24 +336,28 @@ export default function App() {
       showFlashMessage(t.koMsg);
       return;
     }
+    
     setHistory(prev => [...prev, { board: board.map(row => [...row]), currentPlayer, captures: { ...captures }, lastBoardState }]);
     setLastBoardState(JSON.stringify(board));
     const newBoard = testBoard;
     const newCaptures = { ...captures, [currentPlayer]: captures[currentPlayer] + captured.length };
+    
     let gameOver = isGameOver;
     let winMsg = "";
     if (gameMode === 'kill' && captured.length > 0) {
       gameOver = true;
-      winMsg = t.killWin.replace('{winner}', currentPlayer === 1 ? t.black : t.white);
+      const winnerName = playerNames[currentPlayer] || (currentPlayer === 1 ? t.black : t.white);
+      winMsg = t.killWin.replace('{winner}', winnerName);
       showFlashMessage(winMsg);
     }
+    
     setBoard(newBoard);
     setCaptures(newCaptures);
     setIsGameOver(gameOver);
     setPassCount(0);
     setCurrentPlayer(opponent);
     if (roomId) syncToCloud(newBoard, opponent, newCaptures, gameOver, 0, winMsg);
-  }, [board, isGameOver, playerRole, currentPlayer, findCaptures, findGroupAndLiberties, lastBoardState, captures, gameMode, t, roomId, syncToCloud, showFlashMessage]);
+  }, [board, isGameOver, playerRole, currentPlayer, findCaptures, findGroupAndLiberties, lastBoardState, captures, gameMode, t, roomId, syncToCloud, showFlashMessage, playerNames]);
 
   const handlePass = useCallback(() => {
     if (isGameOver || (playerRole && currentPlayer !== playerRole)) return;
@@ -367,25 +366,31 @@ export default function App() {
     let gameOver = isGameOver;
     const nextPlayer = currentPlayer === 1 ? 2 : 1;
     let passMsg = "";
+    
     if (nextPass >= 2) {
       gameOver = true;
       const b = scoreData.blackTerritory + captures[1];
       const w = scoreData.whiteTerritory + captures[2] + KOMI;
-      const winner = b > w ? t.black : t.white;
+      const winner = b > w ? (playerNames[1] || t.black) : (playerNames[2] || t.white);
       passMsg = t.gameOver.replace('{winner}', winner).replace('{b}', b.toFixed(1)).replace('{w}', w.toFixed(1));
     } else {
-      passMsg = t.passedMsg.replace('{player}', currentPlayer === 1 ? t.black : t.white);
+      const pName = playerNames[currentPlayer] || (currentPlayer === 1 ? t.black : t.white);
+      passMsg = t.passedMsg.replace('{player}', pName);
     }
+    
     showFlashMessage(passMsg);
     setPassCount(nextPass);
     setIsGameOver(gameOver);
     setCurrentPlayer(nextPlayer);
     if (roomId) syncToCloud(board, nextPlayer, captures, gameOver, nextPass, passMsg);
-  }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage]);
+  }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames]);
 
   const resetGame = useCallback(() => {
-    if (roomId && playerRole !== 1) return; 
-    setBoard(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
+    // Only active participants can reset an online game.
+    if (roomId && !playerRole) return; 
+    
+    const emptyBoard = Array(SIZE).fill(null).map(() => Array(SIZE).fill(0));
+    setBoard(emptyBoard);
     setCurrentPlayer(1);
     setCaptures({ 1: 0, 2: 0 });
     setHistory([]);
@@ -393,7 +398,8 @@ export default function App() {
     setIsGameOver(false);
     setShowResetModal(false);
     showFlashMessage(t.resetNotify);
-    if (roomId) syncToCloud(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)), 1, { 1: 0, 2: 0 }, false, 0, t.resetNotify);
+    
+    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, t.resetNotify);
   }, [roomId, playerRole, t, showFlashMessage, syncToCloud]);
 
   const undoMove = useCallback(() => {
@@ -433,33 +439,59 @@ export default function App() {
     resetGame();
   }, [resetGame]);
 
+  // --- 4. START ROOM WITH RANDOM ROLE (NEW ADDON) ---
   const startOnlineRoom = async () => {
     if (!user) { setIsAuthModalOpen(true); return; }
     if (!db) return;
+    
     const newRoomId = Math.random().toString(36).substring(2, 9);
+    const hostIsBlack = Math.random() > 0.5; // Randomize Host Color
+    const assignedRole = hostIsBlack ? 1 : 2;
+    const name = user.displayName || user.email.split('@')[0];
+
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
+    
+    // Create the document with names and IDs
     await setDoc(roomRef, {
       board: JSON.stringify(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0))),
-      currentPlayer: 1, captures: { 1: 0, 2: 0 }, isGameOver: false,
-      gameMode, passCount: 0, lastMoveBy: user.uid, createdAt: Date.now()
+      currentPlayer: 1, 
+      captures: { 1: 0, 2: 0 }, 
+      isGameOver: false,
+      gameMode, 
+      passCount: 0, 
+      lastMoveBy: user.uid, 
+      createdAt: Date.now(),
+      player1Id: hostIsBlack ? user.uid : null,
+      player2Id: !hostIsBlack ? user.uid : null,
+      player1Name: hostIsBlack ? name : null,
+      player2Name: !hostIsBlack ? name : null
     });
+    
     setRoomId(newRoomId);
-    setPlayerRole(1); 
+    setPlayerRole(assignedRole); 
     resetGame();
   };
 
-  const copyRoomLink = () => {
+  // --- 5. MODERN COPY API (NEW ADDON) ---
+  const copyRoomLink = async () => {
     const link = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
-    const textArea = document.createElement("textarea");
-    textArea.value = link;
-    document.body.appendChild(textArea);
-    textArea.select();
     try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(link);
+      } else {
+        // Fallback for older browsers
+        const textArea = document.createElement("textarea");
+        textArea.value = link;
+        document.body.appendChild(textArea);
+        textArea.select();
         document.execCommand('copy');
-        setIsCopied(true);
-        setTimeout(() => setIsCopied(false), 2000);
-    } catch (err) {}
-    document.body.removeChild(textArea);
+        document.body.removeChild(textArea);
+      }
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy link:", err);
+    }
   };
 
   // --- EMERGENCY UI (Prevents White Screen) ---
@@ -518,7 +550,7 @@ export default function App() {
                     <button onClick={copyRoomLink} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-md">
                         {isCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />} {isCopied ? t.linkCopied : t.copyLink}
                     </button>
-                    <button onClick={() => { setRoomId(null); setPlayerRole(null); resetGame(); }} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-xl text-xs font-bold">
+                    <button onClick={() => { setRoomId(null); setPlayerRole(null); resetGame(); window.history.replaceState({}, '', window.location.pathname); }} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-xl text-xs font-bold">
                         {t.localMode}
                     </button>
                 </div>
@@ -536,11 +568,13 @@ export default function App() {
                 <span className="flex items-center gap-1 font-black"><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> ONLINE</span>
             </div>
         )}
+        
+        {/* --- DYNAMIC SCOREBOARD --- */}
         <div className={`grid grid-cols-3 w-full mb-4 px-2 py-3 rounded-xl border border-gray-200 gap-1 transition-colors ${gameMode === 'kill' ? 'bg-red-50' : 'bg-gray-50'}`}>
           <div className="flex flex-col items-start min-w-0">
             <div className="flex items-center gap-1 mb-1">
               <div className={`w-2.5 h-2.5 rounded-full bg-black shadow-sm ${currentPlayer === 1 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
-              <span className="font-bold text-[10px] sm:text-xs truncate">{t.black}</span>
+              <span className="font-bold text-[10px] sm:text-xs truncate">{playerNames[1] || t.black}</span>
             </div>
             {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.blackTerritory}</p>}
             <p className="text-[8px] text-gray-500 truncate">{t.caps}: {captures[1]}</p>
@@ -548,7 +582,7 @@ export default function App() {
           </div>
           <div className="flex flex-col items-center justify-center border-x border-gray-200 text-center">
             <div className={`text-[8px] font-black uppercase tracking-tighter mb-0.5 truncate w-full ${isGameOver ? 'text-green-600' : 'text-blue-600'}`}>
-              {isGameOver ? 'FINISH' : `${currentPlayer === 1 ? t.black : t.white}${t.turnSuffix}`}
+              {isGameOver ? 'FINISH' : `${playerNames[currentPlayer] || (currentPlayer === 1 ? t.black : t.white)}${t.turnSuffix}`}
             </div>
             <div className="text-[7px] text-gray-400 font-bold uppercase whitespace-nowrap">
               {gameMode === 'classic' ? `${scoreData.emptyCount} ${t.pointsRemaining}` : "FIRST KILL WINS"}
@@ -556,7 +590,7 @@ export default function App() {
           </div>
           <div className="flex flex-col items-end text-right min-w-0">
             <div className="flex items-center gap-1 mb-1">
-              <span className="font-bold text-[10px] sm:text-xs truncate">{t.white}</span>
+              <span className="font-bold text-[10px] sm:text-xs truncate">{playerNames[2] || t.white}</span>
               <div className={`w-2.5 h-2.5 rounded-full bg-white border border-gray-300 shadow-sm ${currentPlayer === 2 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
             </div>
             {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.whiteTerritory}</p>}
@@ -564,6 +598,7 @@ export default function App() {
             <p className="text-sm sm:text-base font-black text-gray-700">{(gameMode === 'classic' ? (scoreData.whiteTerritory + captures[2] + KOMI) : captures[2]).toFixed(1)}</p>
           </div>
         </div>
+
         <div className={`relative p-2 sm:p-4 rounded-xl shadow-inner mb-4 select-none touch-none border-4 transition-colors ${gameMode === 'kill' ? 'bg-[#c15b5b] border-[#a04a4a]' : 'bg-[#dbb06d] border-[#c19a5b]'}`}>
             <div className="absolute inset-0 opacity-40 pointer-events-none" style={{backgroundImage: 'url("https://www.transparenttextures.com/patterns/wood-pattern.png")'}}></div>
             <div className="relative z-10">
@@ -588,7 +623,7 @@ export default function App() {
         <div className="grid grid-cols-3 gap-2 w-full max-w-sm">
             <button onClick={undoMove} disabled={history.length === 0 || isGameOver || !!roomId} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><Undo2 size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.undoBtn}</span></button>
             <button onClick={handlePass} disabled={isGameOver || (playerRole && currentPlayer !== playerRole)} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><ChevronRight size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.passBtn}</span></button>
-            <button onClick={() => setShowResetModal(true)} disabled={roomId && playerRole !== 1} className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span></button>
+            <button onClick={() => setShowResetModal(true)} disabled={roomId && !playerRole} className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span></button>
         </div>
       </div>
 
