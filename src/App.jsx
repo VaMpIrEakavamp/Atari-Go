@@ -127,7 +127,7 @@ const Logo = () => (
 const Confetti = () => {
   const colors = ['bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500', 'bg-purple-500', 'bg-pink-500'];
   return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-3xl z-0">
+    <div className="fixed inset-0 pointer-events-none overflow-hidden z-[400]">
       {[...Array(60)].map((_, i) => (
         <div 
           key={i} 
@@ -175,13 +175,17 @@ export default function App() {
   const [playerRole, setPlayerRole] = useState(null); 
   const [isCopied, setIsCopied] = useState(false);
   
+  // --- WIN/LOSS HIGHLIGHT STATES ---
+  const [winningMove, setWinningMove] = useState(null);
+  const [capturedStones, setCapturedStones] = useState([]);
+
   const [playerNames, setPlayerNames] = useState({ 1: '', 2: '' });
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
 
   // --- LEADERBOARD STATE ---
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [leaderboardData, setLeaderboardData] = useState([]);
-  const [leaderboardSort, setLeaderboardSort] = useState('total'); // 'total', 'classic', 'kill'
+  const [leaderboardSort, setLeaderboardSort] = useState('total');
 
   const t = i18n[lang];
 
@@ -190,7 +194,6 @@ export default function App() {
     setMessage(msg);
   }, []);
 
-  // Clear flash message timer
   useEffect(() => {
     if (message && !isGameOver) {
       const timer = setTimeout(() => setMessage(''), 3000);
@@ -231,7 +234,6 @@ export default function App() {
     const urlRoomId = params.get('room');
     
     if (urlRoomId && !roomId && user && db) {
-      // NEW RULE: If user is an anonymous guest, force them to log in before joining
       if (user.isAnonymous) {
         setAuthErrorMsg(t.mustLoginToJoin);
         setIsAuthModalOpen(true);
@@ -293,6 +295,8 @@ export default function App() {
           setIsGameOver(data.isGameOver);
           setGameMode(data.gameMode);
           setPassCount(data.passCount);
+          setWinningMove(data.winningMove ? JSON.parse(data.winningMove) : null);
+          setCapturedStones(data.capturedStones ? JSON.parse(data.capturedStones) : []);
           if (data.message) showFlashMessage(data.message);
         }
       }
@@ -352,7 +356,7 @@ export default function App() {
     }
   }, [user, db]);
 
-  const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "") => {
+  const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "", winMove = null, capStones = []) => {
     if (!roomId || !user || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
     try {
@@ -365,6 +369,8 @@ export default function App() {
         gameMode,
         lastMoveBy: user.uid,
         message: customMessage,
+        winningMove: winMove ? JSON.stringify(winMove) : null,
+        capturedStones: capStones.length ? JSON.stringify(capStones) : null,
         updatedAt: Date.now()
       });
     } catch (e) {
@@ -469,13 +475,18 @@ export default function App() {
     
     let gameOver = isGameOver;
     let winMsg = "";
+    let finalWinningMove = null;
+    let finalCapturedStones = [];
+
     if (gameMode === 'kill' && captured.length > 0) {
       gameOver = true;
+      finalWinningMove = { r, c };
+      finalCapturedStones = captured;
+      
       const winnerName = playerNames[currentPlayer] || (currentPlayer === 1 ? t.black : t.white);
       winMsg = t.killWin.replace('{winner}', winnerName);
       showFlashMessage(winMsg);
 
-      // ONLY THE WINNER UPDATES THEIR RANK
       if (roomId && playerRole === currentPlayer) {
         updateLeaderboard('kill');
       }
@@ -484,9 +495,12 @@ export default function App() {
     setBoard(newBoard);
     setCaptures(newCaptures);
     setIsGameOver(gameOver);
+    setWinningMove(finalWinningMove);
+    setCapturedStones(finalCapturedStones);
     setPassCount(0);
     setCurrentPlayer(opponent);
-    if (roomId) syncToCloud(newBoard, opponent, newCaptures, gameOver, 0, winMsg);
+    
+    if (roomId) syncToCloud(newBoard, opponent, newCaptures, gameOver, 0, winMsg, finalWinningMove, finalCapturedStones);
   }, [board, isGameOver, playerRole, currentPlayer, findCaptures, findGroupAndLiberties, lastBoardState, captures, gameMode, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
   const handlePass = useCallback(() => {
@@ -505,7 +519,6 @@ export default function App() {
       const winner = b > w ? (playerNames[1] || t.black) : (playerNames[2] || t.white);
       passMsg = t.gameOver.replace('{winner}', winner).replace('{b}', b.toFixed(1)).replace('{w}', w.toFixed(1));
 
-      // ONLY THE WINNER UPDATES THEIR RANK
       if (roomId && playerRole === winnerRole) {
         updateLeaderboard('classic');
       }
@@ -519,7 +532,7 @@ export default function App() {
     setPassCount(nextPass);
     setIsGameOver(gameOver);
     setCurrentPlayer(nextPlayer);
-    if (roomId) syncToCloud(board, nextPlayer, captures, gameOver, nextPass, passMsg);
+    if (roomId) syncToCloud(board, nextPlayer, captures, gameOver, nextPass, passMsg, null, []);
   }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
   const resetGame = useCallback(() => {
@@ -532,11 +545,13 @@ export default function App() {
     setHistory([]);
     setPassCount(0);
     setIsGameOver(false);
+    setWinningMove(null);
+    setCapturedStones([]);
     setShowResetModal(false);
     showFlashMessage(t.resetNotify);
     setTimeout(() => setMessage(''), 3000);
     
-    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "");
+    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "", null, []);
   }, [roomId, playerRole, t, showFlashMessage, syncToCloud]);
 
   const handleExitOnline = useCallback(() => {
@@ -550,6 +565,8 @@ export default function App() {
     setHistory([]);
     setPassCount(0);
     setIsGameOver(false);
+    setWinningMove(null);
+    setCapturedStones([]);
     setMessage('');
   }, []);
 
@@ -620,7 +637,9 @@ export default function App() {
         player1Id: hostIsBlack ? user.uid : null,
         player2Id: !hostIsBlack ? user.uid : null,
         player1Name: hostIsBlack ? name : null,
-        player2Name: !hostIsBlack ? name : null
+        player2Name: !hostIsBlack ? name : null,
+        winningMove: null,
+        capturedStones: null
       });
       
       setRoomId(newRoomId);
@@ -671,8 +690,10 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col items-center justify-start min-h-screen bg-gray-100 font-sans p-2 sm:p-4 pb-20 sm:pt-4">
-      <div className="w-full max-w-xl flex flex-col gap-3 mb-4 px-2">
+    <div className="flex flex-col items-center justify-start min-h-screen bg-gray-100 font-sans p-2 sm:p-4 pb-20 sm:pt-4 relative">
+      {isGameOver && <Confetti />}
+
+      <div className="w-full max-w-xl flex flex-col gap-3 mb-4 px-2 relative z-10">
         <div className="flex justify-between items-center">
             <div className="flex bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
                 {['classic', 'kill'].map(m => (
@@ -742,7 +763,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="max-w-xl w-full bg-white rounded-2xl shadow-xl flex flex-col items-center p-3 sm:p-6 border border-gray-200 relative">
+      <div className="max-w-xl w-full bg-white rounded-2xl shadow-xl flex flex-col items-center p-3 sm:p-6 border border-gray-200 relative z-10">
         <Logo />
         {roomId && user && (
             <div className="mb-4 flex items-center gap-2 px-3 py-1 bg-indigo-50 border border-indigo-100 rounded-full text-[10px] text-indigo-700 font-bold">
@@ -782,36 +803,76 @@ export default function App() {
           </div>
         </div>
 
-        <div className={`relative p-2 sm:p-4 rounded-xl shadow-inner mb-4 select-none touch-none border-4 transition-colors ${gameMode === 'kill' ? 'bg-[#c15b5b] border-[#a04a4a]' : 'bg-[#dbb06d] border-[#c19a5b]'}`}>
+        <div className={`relative p-2 sm:p-4 rounded-xl shadow-inner select-none touch-none border-4 transition-colors ${gameMode === 'kill' ? 'bg-[#c15b5b] border-[#a04a4a]' : 'bg-[#dbb06d] border-[#c19a5b]'}`}>
             <div className="absolute inset-0 opacity-40 pointer-events-none" style={{backgroundImage: 'url("https://www.transparenttextures.com/patterns/wood-pattern.png")'}}></div>
             <div className="relative z-10">
                 <div className="grid grid-cols-8 grid-rows-8 w-[260px] h-[260px] sm:w-[360px] sm:h-[360px] border border-black border-opacity-70">
                     {Array(64).fill(0).map((_, i) => <div key={i} className="border-[0.5px] border-black border-opacity-30 box-border"></div>)}
                 </div>
                 <div className="absolute top-0 left-0 w-[260px] h-[260px] sm:w-[360px] sm:h-[360px]">
-                    {board.map((row, r) => row.map((cell, c) => (
-                        <div key={`${r}-${c}`} onClick={() => handleMove(r, c)} className={`absolute flex items-center justify-center ${isGameOver ? 'cursor-default' : 'cursor-pointer'}`}
-                            style={{ top: `${(r / (SIZE - 1)) * 100}%`, left: `${(c / (SIZE - 1)) * 100}%`, width: '11.11%', height: '11.11%', transform: 'translate(-50%, -50%)', zIndex: 20 }}>
-                            {[[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]].some(p => p[0] === r && p[1] === c) && cell === 0 && <div className="absolute w-1 h-1 bg-black bg-opacity-60 rounded-full"></div>}
-                            {cell === 0 && !isGameOver && (!playerRole || currentPlayer === playerRole) && <div className={`w-4/5 h-4/5 rounded-full opacity-0 hover:opacity-30 transition-opacity ${currentPlayer === 1 ? 'bg-black' : 'bg-white border'}`}></div>}
-                            {cell !== 0 && <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in fade-in zoom-in duration-200 ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'}`}></div>}
-                        </div>
-                    )))}
+                    {board.map((row, r) => row.map((cell, c) => {
+                        const isWinningMove = winningMove && winningMove.r === r && winningMove.c === c;
+                        const isCaptured = capturedStones.some(stone => stone.r === r && stone.c === c);
+
+                        return (
+                          <div key={`${r}-${c}`} onClick={() => handleMove(r, c)} className={`absolute flex items-center justify-center ${isGameOver ? 'cursor-default' : 'cursor-pointer'}`}
+                              style={{ top: `${(r / (SIZE - 1)) * 100}%`, left: `${(c / (SIZE - 1)) * 100}%`, width: '11.11%', height: '11.11%', transform: 'translate(-50%, -50%)', zIndex: 20 }}>
+                              
+                              {/* Board Intersection Dots */}
+                              {[[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]].some(p => p[0] === r && p[1] === c) && cell === 0 && <div className="absolute w-1 h-1 bg-black bg-opacity-60 rounded-full"></div>}
+                              
+                              {/* Hover Indicator */}
+                              {cell === 0 && !isGameOver && (!playerRole || currentPlayer === playerRole) && <div className={`w-4/5 h-4/5 rounded-full opacity-0 hover:opacity-30 transition-opacity ${currentPlayer === 1 ? 'bg-black' : 'bg-white border'}`}></div>}
+                              
+                              {/* Actual Stones */}
+                              {cell !== 0 && (
+                                <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in fade-in zoom-in duration-200 ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'} ${isWinningMove ? 'ring-4 ring-green-500 shadow-[0_0_15px_rgba(34,197,94,1)] scale-110 z-30' : ''}`}></div>
+                              )}
+
+                              {/* Target Marker for KILLED Stones */}
+                              {isGameOver && isCaptured && (
+                                <div className="absolute w-[90%] h-[90%] rounded-full bg-red-500/40 border-2 border-red-500 flex items-center justify-center z-20 animate-in zoom-in">
+                                  <div className="w-2 h-2 bg-red-600 rounded-full shadow-[0_0_10px_rgba(220,38,38,1)]"></div>
+                                </div>
+                              )}
+                          </div>
+                        );
+                    }))}
                 </div>
             </div>
         </div>
-        <div className="h-6 mb-2 flex items-center justify-center text-center">
-            {message && !isGameOver && <div className={`px-3 py-0.5 rounded-full text-[9px] font-bold shadow-sm animate-pulse text-white bg-blue-600`}>{message}</div>}
-        </div>
-        <div className="grid grid-cols-3 gap-2 w-full max-w-sm">
-            <button onClick={undoMove} disabled={history.length === 0 || isGameOver || !!roomId} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><Undo2 size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.undoBtn}</span></button>
-            <button onClick={handlePass} disabled={isGameOver || (playerRole && currentPlayer !== playerRole)} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><ChevronRight size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.passBtn}</span></button>
-            <button onClick={() => setShowResetModal(true)} disabled={roomId && !playerRole} className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span></button>
+
+        {/* --- DYNAMIC ACTION AREA --- */}
+        <div className="w-full mt-4 h-[72px] flex items-center justify-center">
+          {isGameOver ? (
+             <div className="w-full h-full bg-white border border-yellow-300 rounded-xl px-4 py-2 shadow-lg flex items-center justify-between animate-in slide-in-from-bottom-2 relative z-10">
+               <div className="flex flex-col flex-1 truncate pr-2">
+                 <div className="flex items-center gap-1.5 text-yellow-500 font-black tracking-tighter uppercase text-[10px]">
+                   <Trophy size={14} /> {t.gameOverTitle}
+                 </div>
+                 <span className="text-xs font-bold text-gray-700 truncate">{message}</span>
+               </div>
+               <div className="flex gap-2 shrink-0">
+                 <button onClick={handleExitOnline} className="px-3 py-2 bg-gray-100 border border-gray-200 text-gray-600 text-[10px] font-bold rounded-lg hover:bg-gray-200 active:scale-95 transition-all">
+                   {t.exitOnline}
+                 </button>
+                 <button onClick={resetGame} disabled={roomId && !playerRole} className="px-3 py-2 bg-green-500 text-white text-[10px] font-black uppercase rounded-lg shadow-md hover:bg-green-600 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none">
+                   {t.rematch}
+                 </button>
+               </div>
+             </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-2 w-full max-w-sm h-full">
+                <button onClick={undoMove} disabled={history.length === 0 || !!roomId} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><Undo2 size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.undoBtn}</span></button>
+                <button onClick={handlePass} disabled={(playerRole && currentPlayer !== playerRole)} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><ChevronRight size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.passBtn}</span></button>
+                <button onClick={() => setShowResetModal(true)} disabled={roomId && !playerRole} className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span></button>
+            </div>
+          )}
         </div>
       </div>
 
       {/* --- STYLISH FOOTER --- */}
-      <div className="mt-6 mb-4 flex flex-col items-center justify-center gap-2">
+      <div className="mt-6 mb-4 flex flex-col items-center justify-center gap-2 relative z-10">
           <span className="text-gray-400 text-[10px] font-bold uppercase tracking-widest">Created by OG</span>
           <a 
             href="https://www.instagram.com/0g_2k6?utm_source=ig_web_button_share_sheet&igsh=ZDNlZDc0MzIxNw==" 
@@ -862,30 +923,8 @@ export default function App() {
         </div>
       )}
 
-      {isGameOver && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <Confetti />
-          <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-sm w-full animate-in zoom-in slide-in-from-bottom-4 duration-500 relative z-10 flex flex-col items-center text-center">
-            <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center text-yellow-500 mb-4 shadow-inner animate-bounce">
-              <Trophy size={40} />
-            </div>
-            <h2 className="text-3xl font-black text-gray-900 mb-2 uppercase tracking-tighter">{t.gameOverTitle}</h2>
-            <p className="text-sm font-bold text-gray-600 mb-8 px-4 leading-relaxed">{message}</p>
-            
-            <div className="flex gap-3 w-full">
-              <button onClick={handleExitOnline} className="flex-1 py-3 bg-gray-100 border border-gray-200 text-gray-700 text-xs font-bold rounded-xl shadow-sm hover:bg-gray-200 active:scale-95 transition-all">
-                {t.exitOnline}
-              </button>
-              <button onClick={resetGame} disabled={roomId && !playerRole} className="flex-1 py-3 bg-green-500 text-white text-xs font-black uppercase rounded-xl shadow-lg shadow-green-200 hover:bg-green-600 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none">
-                {t.rematch}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {isAuthModalOpen && (
-          <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+          <div className="fixed inset-0 z-[600] flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
               <div className="bg-white rounded-3xl shadow-2xl p-8 max-sm:p-6 max-w-sm w-full animate-in zoom-in duration-300">
                   <div className="flex flex-col items-center mb-6 text-center">
                       <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center text-indigo-600 mb-4"><ShieldCheck size={32} /></div>
