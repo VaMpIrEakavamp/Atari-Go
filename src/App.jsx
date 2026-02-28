@@ -1,19 +1,36 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import { Instagram, RotateCcw, ChevronRight, Undo2, Trophy, Swords, Zap, Layout, Globe, Copy, User, CheckCircle2 } from 'lucide-react';
+import { 
+  Instagram, RotateCcw, ChevronRight, Undo2, Trophy, 
+  Swords, Zap, Layout, Globe, Copy, User, CheckCircle2, 
+  LogIn, LogOut, Mail, Lock, ShieldCheck 
+} from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, updateDoc, collection } from 'firebase/firestore';
+import { 
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, signOut, updateProfile
+} from 'firebase/auth';
+import { getFirestore, doc, onSnapshot, updateDoc, setDoc } from 'firebase/firestore';
 
-// --- FIREBASE INITIALIZATION ---
-// These constants are provided by the environment at runtime
-const firebaseConfig = typeof __firebase_config !== 'undefined' 
-  ? JSON.parse(__firebase_config) 
-  : { apiKey: "", authDomain: "", projectId: "", storageBucket: "", messagingSenderId: "", appId: "" };
+// --- FIREBASE PRODUCTION CREDENTIALS ---
+// Directly integrated for production speed as requested
+const firebaseConfig = {
+  apiKey: "AIzaSyBFFdzdHtD_QPSHhrhR4Puf00Xzr66vb5M",
+  authDomain: "atari-go-business.firebaseapp.com",
+  projectId: "atari-go-business",
+  storageBucket: "atari-go-business.firebasestorage.app",
+  messagingSenderId: "591839384619",
+  appId: "1:591839384619:web:bc655a26ebd84d6328466e",
+  measurementId: "G-TR6BTT42WN"
+};
 
+// Initialize Production Services
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'atari-go-default';
+const appId = 'atari-go-production-v1';
+
+const SIZE = 9;
+const KOMI = 6.5;
 
 // --- TRANSLATIONS ---
 const i18n = {
@@ -47,7 +64,16 @@ const i18n = {
     copyLink: "Copy Link",
     onlineAs: "Playing as:",
     linkCopied: "Link Copied!",
-    localMode: "Local Mode"
+    localMode: "Local Mode",
+    loginTitle: "Enter the Dojo",
+    email: "Email Address",
+    password: "Password",
+    username: "Username",
+    signIn: "Sign In",
+    signUp: "Create Account",
+    noAccount: "New player? Register",
+    hasAccount: "Already a master? Login",
+    authError: "Auth Error: Check your data."
   },
   pt: {
     title: "Atari GO (9x9)",
@@ -79,12 +105,18 @@ const i18n = {
     copyLink: "Copiar Link",
     onlineAs: "Jogando como:",
     linkCopied: "Link Copiado!",
-    localMode: "Modo Local"
+    localMode: "Modo Local",
+    loginTitle: "Entrar no Dojo",
+    email: "E-mail",
+    password: "Senha",
+    username: "Usuário",
+    signIn: "Entrar",
+    signUp: "Criar Conta",
+    noAccount: "Novo jogador? Registre-se",
+    hasAccount: "Já é um mestre? Login",
+    authError: "Erro de autenticação."
   }
 };
-
-const SIZE = 9;
-const KOMI = 6.5;
 
 const Logo = () => (
   <div className="flex items-center gap-2 mb-2 group select-none">
@@ -106,7 +138,13 @@ const Logo = () => (
 );
 
 export default function App() {
+  // --- STATE ---
   const [user, setUser] = useState(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authMode, setAuthMode] = useState('login'); 
+  const [authForm, setAuthForm] = useState({ email: '', password: '', username: '' });
+  const [authLoading, setAuthLoading] = useState(false);
+
   const [board, setBoard] = useState(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
   const [currentPlayer, setCurrentPlayer] = useState(1);
   const [captures, setCaptures] = useState({ 1: 0, 2: 0 });
@@ -119,36 +157,34 @@ export default function App() {
   const [showResetModal, setShowResetModal] = useState(false);
   const [isGameOver, setIsGameOver] = useState(false);
   const [roomId, setRoomId] = useState(null);
-  const [playerRole, setPlayerRole] = useState(null); // 1 for Black (Host), 2 for White (Guest)
+  const [playerRole, setPlayerRole] = useState(null); 
   const [isCopied, setIsCopied] = useState(false);
 
   const t = i18n[lang];
 
-  // --- (1) AUTHENTICATION ---
+  // --- FLASH MESSAGES ---
+  const showFlashMessage = useCallback((msg) => {
+    if (!msg) return;
+    setMessage(msg);
+    setTimeout(() => setMessage(''), 3000);
+  }, []);
+
+  // --- AUTH OBSERVER ---
   useEffect(() => {
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) setIsAuthModalOpen(false);
+    });
     return () => unsubscribe();
   }, []);
 
-  // --- (2) MULTIPLAYER SYNC ---
+  // --- SYNC ENGINE ---
   useEffect(() => {
     if (!user || !roomId) return;
-
-    // Follow Rule 1: Strict Paths
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
-    
     const unsubscribe = onSnapshot(roomRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
-        // Only update if the change came from the other player
         if (data.lastMoveBy !== user.uid) {
           setBoard(JSON.parse(data.board));
           setCurrentPlayer(data.currentPlayer);
@@ -156,42 +192,51 @@ export default function App() {
           setIsGameOver(data.isGameOver);
           setGameMode(data.gameMode);
           setPassCount(data.passCount);
-          if (data.message && data.lastMoveBy) {
-            setMessage(data.message);
-            setTimeout(() => setMessage(''), 3000);
-          }
+          if (data.message) showFlashMessage(data.message);
         }
       }
     }, (error) => console.error("Sync error:", error));
-
     return () => unsubscribe();
-  }, [user, roomId]);
+  }, [user, roomId, showFlashMessage]);
 
-  // --- (3) URL & SEO PARSING ---
+  // --- INITIAL LOAD PARSING ---
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const rId = urlParams.get('room');
     if (rId) {
       setRoomId(rId);
-      setPlayerRole(2); // If you follow a link, you are the guest (White)
+      setPlayerRole(2);
+      if (!user) setIsAuthModalOpen(true);
     }
+  }, [user]);
 
-    const siteUrl = "https://atari-go.vercel.app/";
-    document.title = `Atari GO - Play Online`;
-    let canonical = document.querySelector('link[rel="canonical"]') || document.createElement('link');
-    canonical.rel = 'canonical';
-    canonical.href = siteUrl;
-    if (!canonical.parentNode) document.head.appendChild(canonical);
-  }, []);
+  // --- CLOUD SYNC HELPER ---
+  const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "") => {
+    if (!roomId || !user) return;
+    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
+    try {
+      await updateDoc(roomRef, {
+        board: JSON.stringify(newBoard),
+        currentPlayer: nextPlayer,
+        captures: newCaptures,
+        isGameOver: gameOver,
+        passCount: newPassCount,
+        gameMode,
+        lastMoveBy: user.uid,
+        lastMoveName: user.displayName || user.email,
+        message: customMessage,
+        updatedAt: Date.now()
+      });
+    } catch (e) {
+      console.error("Cloud sync failed", e);
+    }
+  }, [roomId, user, gameMode]);
 
-  // --- LOGIC HELPERS ---
+  // --- LOGIC UTILS ---
   const findGroupAndLiberties = useCallback((tempBoard, r, c) => {
     const color = tempBoard[r][c];
     if (color === 0) return { group: [], liberties: [] };
-    const queue = [{ r, c }];
-    const visited = new Set([`${r},${c}`]);
-    const group = [];
-    const liberties = new Set();
+    const queue = [{ r, c }], visited = new Set([`${r},${c}`]), group = [], liberties = new Set();
     while (queue.length > 0) {
       const curr = queue.shift();
       group.push(curr);
@@ -210,8 +255,7 @@ export default function App() {
   }, []);
 
   const findCaptures = useCallback((tempBoard, opponentColor) => {
-    const captured = [];
-    const processed = new Set();
+    const captured = [], processed = new Set();
     for (let r = 0; r < SIZE; r++) {
       for (let c = 0; c < SIZE; c++) {
         if (tempBoard[r][c] === opponentColor && !processed.has(`${r},${c}`)) {
@@ -257,35 +301,14 @@ export default function App() {
     return { blackTerritory, whiteTerritory, emptyCount };
   }, [board]);
 
-  const syncToCloud = async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "") => {
-    if (!roomId || !user) return;
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
-    await updateDoc(roomRef, {
-      board: JSON.stringify(newBoard),
-      currentPlayer: nextPlayer,
-      captures: newCaptures,
-      isGameOver: gameOver,
-      passCount: newPassCount,
-      gameMode: gameMode,
-      lastMoveBy: user.uid,
-      message: customMessage,
-      updatedAt: Date.now()
-    });
-  };
-
-  const showFlashMessage = (msg) => {
-    setMessage(msg);
-    setTimeout(() => setMessage(''), 3000);
-  };
-
-  const handleMove = (r, c) => {
+  // --- ACTIONS ---
+  const handleMove = useCallback((r, c) => {
     if (board[r][c] !== 0 || isGameOver) return;
     if (playerRole && currentPlayer !== playerRole) return; 
 
     const testBoard = board.map(row => [...row]);
     testBoard[r][c] = currentPlayer;
     const opponent = currentPlayer === 1 ? 2 : 1;
-    
     const captured = findCaptures(testBoard, opponent);
     captured.forEach(pos => testBoard[pos.r][pos.c] = 0);
 
@@ -320,23 +343,10 @@ export default function App() {
     setCurrentPlayer(opponent);
 
     if (roomId) syncToCloud(newBoard, opponent, newCaptures, gameOver, 0, winMsg);
-  };
+  }, [board, isGameOver, playerRole, currentPlayer, findCaptures, findGroupAndLiberties, lastBoardState, captures, gameMode, t, roomId, syncToCloud, showFlashMessage]);
 
-  const undoMove = () => {
-    if (history.length === 0 || isGameOver || !!roomId) return; 
-    const last = history[history.length - 1];
-    setBoard(last.board);
-    setCurrentPlayer(last.currentPlayer);
-    setCaptures(last.captures);
-    setLastBoardState(last.lastBoardState);
-    setHistory(prev => prev.slice(0, -1));
-    showFlashMessage(t.undoNotify);
-  };
-
-  const handlePass = () => {
-    if (isGameOver) return;
-    if (playerRole && currentPlayer !== playerRole) return;
-
+  const handlePass = useCallback(() => {
+    if (isGameOver || (playerRole && currentPlayer !== playerRole)) return;
     setHistory(prev => [...prev, { board: board.map(row => [...row]), currentPlayer, captures: { ...captures }, lastBoardState }]);
     const nextPass = passCount + 1;
     let gameOver = isGameOver;
@@ -357,30 +367,21 @@ export default function App() {
     setPassCount(nextPass);
     setIsGameOver(gameOver);
     setCurrentPlayer(nextPlayer);
-
     if (roomId) syncToCloud(board, nextPlayer, captures, gameOver, nextPass, passMsg);
-  };
+  }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage]);
 
-  const startOnlineRoom = async () => {
-    if (!user) return;
-    const newRoomId = Math.random().toString(36).substring(2, 9);
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
-    await setDoc(roomRef, {
-      board: JSON.stringify(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0))),
-      currentPlayer: 1,
-      captures: { 1: 0, 2: 0 },
-      isGameOver: false,
-      gameMode: gameMode,
-      passCount: 0,
-      lastMoveBy: user.uid,
-      createdAt: Date.now()
-    });
-    setRoomId(newRoomId);
-    setPlayerRole(1); 
-    resetGame();
-  };
+  const undoMove = useCallback(() => {
+    if (history.length === 0 || isGameOver || !!roomId) return; 
+    const last = history[history.length - 1];
+    setBoard(last.board);
+    setCurrentPlayer(last.currentPlayer);
+    setCaptures(last.captures);
+    setLastBoardState(last.lastBoardState);
+    setHistory(prev => prev.slice(0, -1));
+    showFlashMessage(t.undoNotify);
+  }, [history, isGameOver, roomId, t, showFlashMessage]);
 
-  const resetGame = () => {
+  const resetGame = useCallback(() => {
     if (roomId && playerRole !== 1) return; 
     setBoard(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
     setCurrentPlayer(1);
@@ -391,18 +392,57 @@ export default function App() {
     setShowResetModal(false);
     showFlashMessage(t.resetNotify);
     if (roomId) syncToCloud(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)), 1, { 1: 0, 2: 0 }, false, 0, t.resetNotify);
+  }, [roomId, playerRole, t, showFlashMessage, syncToCloud]);
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    try {
+      if (authMode === 'signup') {
+        const cred = await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
+        await updateProfile(cred.user, { displayName: authForm.username });
+      } else {
+        await signInWithEmailAndPassword(auth, authForm.email, authForm.password);
+      }
+    } catch (err) {
+      showFlashMessage(t.authError);
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
-  const copyRoomLink = () => {
-    const link = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
-    const textField = document.createElement('textarea');
-    textField.innerText = link;
-    document.body.appendChild(textField);
-    textField.select();
-    document.execCommand('copy');
-    textField.remove();
-    setIsCopied(true);
-    setTimeout(() => setIsCopied(false), 2000);
+  const handleSignOut = useCallback(() => {
+    signOut(auth);
+    setRoomId(null);
+    setPlayerRole(null);
+    setBoard(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
+    setCurrentPlayer(1);
+    setCaptures({ 1: 0, 2: 0 });
+    setHistory([]);
+    setPassCount(0);
+    setIsGameOver(false);
+  }, []);
+
+  const startOnlineRoom = async () => {
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    const newRoomId = Math.random().toString(36).substring(2, 9);
+    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
+    await setDoc(roomRef, {
+      board: JSON.stringify(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0))),
+      currentPlayer: 1,
+      captures: { 1: 0, 2: 0 },
+      isGameOver: false,
+      gameMode,
+      passCount: 0,
+      lastMoveBy: user.uid,
+      createdAt: Date.now()
+    });
+    setRoomId(newRoomId);
+    setPlayerRole(1); 
+    resetGame();
   };
 
   const isHoshi = (r, c) => [[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]].some(p => p[0] === r && p[1] === c);
@@ -410,56 +450,53 @@ export default function App() {
   return (
     <div className="flex flex-col items-center justify-start min-h-screen bg-gray-100 font-sans p-2 sm:p-4 pb-20 sm:pt-4">
       
+      {/* Top Nav */}
       <div className="w-full max-w-xl flex flex-col gap-3 mb-4 px-2">
         <div className="flex justify-between items-center">
             <div className="flex bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
                 {['classic', 'kill'].map(m => (
-                    <button 
-                    key={m}
-                    onClick={() => { if(!roomId) { setGameMode(m); resetGame(); } }}
-                    disabled={!!roomId}
-                    className={`px-3 py-1.5 text-[10px] font-bold flex items-center gap-1.5 transition-colors ${gameMode === m ? 'bg-indigo-600 text-white' : 'hover:bg-gray-50 text-gray-600'} disabled:opacity-50`}
+                    <button key={m} onClick={() => { if(!roomId) { setGameMode(m); resetGame(); } }} disabled={!!roomId}
+                      className={`px-3 py-1.5 text-[10px] font-bold flex items-center gap-1.5 transition-colors ${gameMode === m ? 'bg-indigo-600 text-white' : 'hover:bg-gray-50 text-gray-600'} disabled:opacity-50`}
                     >
                     {m === 'classic' ? <Layout size={12} /> : <Swords size={12} />}
                     {m === 'classic' ? t.modeClassic : t.modeKill}
                     </button>
                 ))}
             </div>
-            
             <div className="flex bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
                 {['en', 'pt'].map(l => (
-                    <button 
-                    key={l}
-                    onClick={() => setLang(l)}
-                    className={`px-3 py-1.5 text-[10px] font-bold transition-colors ${lang === l ? 'bg-blue-600 text-white' : 'hover:bg-gray-50 text-gray-600'}`}
-                    >
-                    {l.toUpperCase()}
+                    <button key={l} onClick={() => setLang(l)} className={`px-3 py-1.5 text-[10px] font-bold transition-colors ${lang === l ? 'bg-blue-600 text-white' : 'hover:bg-gray-50 text-gray-600'}`}>
+                      {l.toUpperCase()}
                     </button>
                 ))}
             </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 justify-center">
-            {!roomId ? (
-                <button 
-                    onClick={startOnlineRoom}
-                    className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-xl text-xs font-bold hover:bg-green-700 transition-all shadow-md active:scale-95"
-                >
-                    <Globe size={14} /> {t.playOnline}
+        <div className="flex flex-wrap gap-2 justify-center items-center">
+            {!user ? (
+                <button onClick={() => setIsAuthModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 shadow-md active:scale-95">
+                    <LogIn size={14} /> {t.playOnline}
                 </button>
+            ) : !roomId ? (
+                <div className="flex items-center gap-2">
+                    <button onClick={startOnlineRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-xl text-xs font-bold hover:bg-green-700 shadow-md active:scale-95">
+                        <Globe size={14} /> {t.playOnline}
+                    </button>
+                    <button onClick={handleSignOut} className="px-3 py-2 bg-white border border-gray-200 text-gray-500 rounded-xl hover:text-red-500 transition-colors active:scale-95">
+                        <LogOut size={14} />
+                    </button>
+                </div>
             ) : (
                 <div className="flex items-center gap-2">
-                    <button 
-                        onClick={copyRoomLink}
-                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition-all shadow-md active:scale-95"
-                    >
-                        {isCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-                        {isCopied ? t.linkCopied : t.copyLink}
+                    <button onClick={() => {
+                        const link = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+                        navigator.clipboard?.writeText?.(link) || alert("Room Link: " + link);
+                        setIsCopied(true);
+                        setTimeout(() => setIsCopied(false), 2000);
+                    }} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-md active:scale-95">
+                        {isCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />} {isCopied ? t.linkCopied : t.copyLink}
                     </button>
-                    <button 
-                        onClick={() => { setRoomId(null); setPlayerRole(null); resetGame(); }}
-                        className="px-4 py-2 bg-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-300 transition-all"
-                    >
+                    <button onClick={() => { setRoomId(null); setPlayerRole(null); resetGame(); }} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-xl text-xs font-bold active:scale-95">
                         {t.localMode}
                     </button>
                 </div>
@@ -470,12 +507,12 @@ export default function App() {
       <div className="max-w-xl w-full bg-white rounded-2xl shadow-xl flex flex-col items-center p-3 sm:p-6 border border-gray-200">
         <Logo />
         
-        {roomId && (
+        {roomId && user && (
             <div className="mb-4 flex items-center gap-2 px-3 py-1 bg-indigo-50 border border-indigo-100 rounded-full text-[10px] text-indigo-700 font-bold">
                 <User size={10} />
-                <span>{t.onlineAs} {playerRole === 1 ? t.black : t.white}</span>
+                <span>{(user.displayName || user.email || "Player").split('@')[0]} ({playerRole === 1 ? t.black : t.white})</span>
                 <span className="opacity-30">|</span>
-                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> Online</span>
+                <span className="flex items-center gap-1 font-black"><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> ONLINE</span>
             </div>
         )}
 
@@ -485,36 +522,27 @@ export default function App() {
               <div className={`w-2.5 h-2.5 rounded-full bg-black shadow-sm ${currentPlayer === 1 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
               <span className="font-bold text-[10px] sm:text-xs truncate">{t.black}</span>
             </div>
-            {gameMode === 'classic' && <p className="text-[8px] sm:text-[9px] text-gray-500 whitespace-nowrap">{t.territory}: {scoreData.blackTerritory}</p>}
-            <p className="text-[8px] sm:text-[9px] text-gray-500 whitespace-nowrap">{t.caps}: {captures[1]}</p>
+            {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.blackTerritory}</p>}
+            <p className="text-[8px] text-gray-500 truncate">{t.caps}: {captures[1]}</p>
             <p className="text-sm sm:text-base font-black text-black">
                 {gameMode === 'classic' ? (scoreData.blackTerritory + captures[1]).toFixed(1) : captures[1]}
             </p>
           </div>
-
           <div className="flex flex-col items-center justify-center border-x border-gray-200 text-center">
             <div className={`text-[8px] font-black uppercase tracking-tighter mb-0.5 truncate w-full ${isGameOver ? 'text-green-600' : 'text-blue-600'}`}>
               {isGameOver ? 'FINISH' : `${currentPlayer === 1 ? t.black : t.white}${t.turnSuffix}`}
             </div>
-            {gameMode === 'classic' && (
-              <div className="text-[7px] text-gray-400 font-bold uppercase whitespace-nowrap">
-                {scoreData.emptyCount} {t.pointsRemaining}
-              </div>
-            )}
-            {gameMode === 'kill' && (
-               <div className="text-[7px] text-red-500 font-bold uppercase flex items-center gap-1">
-                 <Zap size={8} /> FIRST KILL WINS
-               </div>
-            )}
+            <div className="text-[7px] text-gray-400 font-bold uppercase whitespace-nowrap">
+              {gameMode === 'classic' ? `${scoreData.emptyCount} ${t.pointsRemaining}` : "FIRST KILL WINS"}
+            </div>
           </div>
-
           <div className="flex flex-col items-end text-right min-w-0">
             <div className="flex items-center gap-1 mb-1">
               <span className="font-bold text-[10px] sm:text-xs truncate">{t.white}</span>
               <div className={`w-2.5 h-2.5 rounded-full bg-white border border-gray-300 shadow-sm ${currentPlayer === 2 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
             </div>
-            {gameMode === 'classic' && <p className="text-[8px] sm:text-[9px] text-gray-500 whitespace-nowrap">{t.territory}: {scoreData.whiteTerritory}</p>}
-            <p className="text-[8px] sm:text-[9px] text-gray-500 whitespace-nowrap">{t.caps}: {captures[2]}</p>
+            {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.whiteTerritory}</p>}
+            <p className="text-[8px] text-gray-500 truncate">{t.caps}: {captures[2]}</p>
             <p className="text-sm sm:text-base font-black text-gray-700">
                 {gameMode === 'classic' ? (scoreData.whiteTerritory + captures[2] + KOMI).toFixed(1) : captures[2]}
             </p>
@@ -529,26 +557,11 @@ export default function App() {
                 </div>
                 <div className="absolute top-0 left-0 w-[260px] h-[260px] sm:w-[360px] sm:h-[360px]">
                     {board.map((row, r) => row.map((cell, c) => (
-                        <div 
-                            key={`${r}-${c}`}
-                            onClick={() => handleMove(r, c)}
-                            className={`absolute flex items-center justify-center ${isGameOver ? 'cursor-default' : 'cursor-pointer'}`}
-                            style={{
-                                top: `${(r / (SIZE - 1)) * 100}%`,
-                                left: `${(c / (SIZE - 1)) * 100}%`,
-                                width: '11.11%',
-                                height: '11.11%',
-                                transform: 'translate(-50%, -50%)',
-                                zIndex: 20
-                            }}
-                        >
+                        <div key={`${r}-${c}`} onClick={() => handleMove(r, c)} className={`absolute flex items-center justify-center ${isGameOver ? 'cursor-default' : 'cursor-pointer'}`}
+                            style={{ top: `${(r / (SIZE - 1)) * 100}%`, left: `${(c / (SIZE - 1)) * 100}%`, width: '11.11%', height: '11.11%', transform: 'translate(-50%, -50%)', zIndex: 20 }}>
                             {isHoshi(r, c) && cell === 0 && <div className="absolute w-1 h-1 bg-black bg-opacity-60 rounded-full"></div>}
-                            {cell === 0 && !isGameOver && (!playerRole || currentPlayer === playerRole) && (
-                                <div className={`w-4/5 h-4/5 rounded-full opacity-0 hover:opacity-30 transition-opacity ${currentPlayer === 1 ? 'bg-black' : 'bg-white border'}`}></div>
-                            )}
-                            {cell !== 0 && (
-                                <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in fade-in zoom-in duration-200 ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'}`}></div>
-                            )}
+                            {cell === 0 && !isGameOver && (!playerRole || currentPlayer === playerRole) && <div className={`w-4/5 h-4/5 rounded-full opacity-0 hover:opacity-30 transition-opacity ${currentPlayer === 1 ? 'bg-black' : 'bg-white border'}`}></div>}
+                            {cell !== 0 && <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in zoom-in duration-200 ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'}`}></div>}
                         </div>
                     )))}
                 </div>
@@ -556,68 +569,79 @@ export default function App() {
         </div>
 
         <div className="h-6 mb-2 flex items-center justify-center">
-            {message && (
-               <div className={`px-3 py-0.5 rounded-full text-[9px] font-bold shadow-sm animate-pulse text-white ${isGameOver ? 'bg-green-600' : 'bg-blue-600'}`}>
-                 {message}
-               </div>
-            )}
+            {message && <div className={`px-3 py-0.5 rounded-full text-[9px] font-black shadow-sm animate-pulse text-white ${isGameOver ? 'bg-green-600' : 'bg-blue-600'}`}>{message}</div>}
         </div>
 
         <div className="grid grid-cols-3 gap-2 w-full max-w-sm">
-            <button 
-                onClick={undoMove} 
-                disabled={history.length === 0 || isGameOver || !!roomId} 
-                className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"
-            >
-                <Undo2 size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 text-gray-500 uppercase">{t.undoBtn}</span>
+            <button onClick={undoMove} disabled={history.length === 0 || isGameOver || !!roomId} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm">
+                <Undo2 size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.undoBtn}</span>
             </button>
-            <button 
-                onClick={handlePass} 
-                disabled={isGameOver || (playerRole && currentPlayer !== playerRole)} 
-                className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"
-            >
-                <ChevronRight size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 text-gray-500 uppercase">{t.passBtn}</span>
+            <button onClick={handlePass} disabled={isGameOver || (playerRole && currentPlayer !== playerRole)} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm">
+                <ChevronRight size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.passBtn}</span>
             </button>
-            <button 
-                onClick={() => setShowResetModal(true)} 
-                disabled={roomId && playerRole !== 1}
-                className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm"
-            >
+            <button onClick={() => setShowResetModal(true)} disabled={roomId && playerRole !== 1} className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm">
                 <RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span>
             </button>
         </div>
 
-        <div className="w-full mt-6 pt-4 border-t border-gray-100 flex flex-col items-center">
-            <div className="text-center text-[8px] text-gray-400 mb-4 leading-tight max-w-[200px] sm:max-w-none" dangerouslySetInnerHTML={{ __html: gameMode === 'classic' ? t.rules : t.killRules }}></div>
-            
+        <div className="w-full mt-6 pt-4 border-t border-gray-100 flex flex-col items-center text-center">
+            <div className="text-[8px] text-gray-400 mb-4 leading-tight" dangerouslySetInnerHTML={{ __html: gameMode === 'classic' ? t.rules : t.killRules }}></div>
             <div className="w-full py-3 bg-gray-50 rounded-xl flex flex-col items-center gap-1 border border-gray-200 shadow-sm">
-                <p className="text-[8px] text-gray-400 uppercase tracking-widest font-black flex items-center gap-1">
-                    <Trophy size={8} className="text-yellow-600" /> CREATED BY <span className="text-gray-700 font-bold">OG</span>
-                </p>
-                <div className="flex flex-col items-center">
-                    <p className="text-[7px] text-gray-300 font-bold mb-1 italic opacity-50">UID: {user?.uid?.substring(0, 8)}...</p>
-                    <a 
-                        href="https://www.instagram.com/0g_2k6?igsh=dWE1cnQ1cjUwenJi" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1 px-3 py-1 bg-white rounded-full shadow-sm border border-gray-200 hover:text-pink-600 transition-all text-[10px] font-bold text-gray-700 group"
-                    >
-                        <Instagram size={10} className="group-hover:rotate-12 transition-transform" />
-                        <span>@0g_2k6</span>
-                    </a>
-                </div>
+                <p className="text-[8px] text-gray-400 uppercase tracking-widest font-black flex items-center gap-1"><Trophy size={8} className="text-yellow-600" /> CREATED BY <span className="text-gray-700 font-bold">OG</span></p>
+                <a href="https://www.instagram.com/0g_2k6?igsh=dWE1cnQ1cjUwenJi" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 px-3 py-1 bg-white rounded-full border border-gray-200 text-[10px] font-bold text-gray-700 group transition-all hover:text-pink-600">
+                    <Instagram size={10} className="group-hover:rotate-12 transition-transform" /> @0g_2k6
+                </a>
             </div>
         </div>
       </div>
 
+      {/* Auth Modal */}
+      {isAuthModalOpen && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+              <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-sm w-full animate-in zoom-in duration-300">
+                  <div className="flex flex-col items-center mb-6 text-center">
+                      <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center text-indigo-600 mb-4"><ShieldCheck size={32} /></div>
+                      <h2 className="text-2xl font-black text-gray-900 leading-none">{t.loginTitle}</h2>
+                  </div>
+                  <form onSubmit={handleAuth} className="space-y-4">
+                      {authMode === 'signup' && (
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-black text-gray-400 uppercase ml-1">{t.username}</label>
+                            <div className="relative">
+                                <User className="absolute left-3 top-3 text-gray-400" size={16} />
+                                <input required type="text" value={authForm.username} onChange={e => setAuthForm({...authForm, username: e.target.value})} className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                            </div>
+                        </div>
+                      )}
+                      <div className="space-y-1">
+                          <label className="text-[10px] font-black text-gray-400 uppercase ml-1">{t.email}</label>
+                          <div className="relative"><Mail className="absolute left-3 top-3 text-gray-400" size={16} /><input required type="email" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all" /></div>
+                      </div>
+                      <div className="space-y-1">
+                          <label className="text-[10px] font-black text-gray-400 uppercase ml-1">{t.password}</label>
+                          <div className="relative"><Lock className="absolute left-3 top-3 text-gray-400" size={16} /><input required type="password" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all" /></div>
+                      </div>
+                      <button disabled={authLoading} type="submit" className="w-full py-4 bg-indigo-600 text-white rounded-xl font-black text-sm hover:bg-indigo-700 transition-all shadow-lg active:scale-95 disabled:opacity-50">
+                          {authLoading ? '...' : (authMode === 'login' ? t.signIn : t.signUp)}
+                      </button>
+                  </form>
+                  <div className="mt-6 text-center">
+                      <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-xs font-bold text-indigo-600 hover:underline">{authMode === 'login' ? t.noAccount : t.hasAccount}</button>
+                      <div className="mt-4 pt-4 border-t border-gray-100"><button onClick={() => setIsAuthModalOpen(false)} className="text-xs text-gray-400 font-bold hover:text-gray-600">{t.modalCancel}</button></div>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Reset Modal */}
       {showResetModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-[2px] p-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-[2px] p-4 text-center">
             <div className="bg-white rounded-2xl shadow-2xl p-5 max-w-[280px] w-full animate-in zoom-in slide-in-from-bottom-2 duration-200">
                 <h3 className="text-base font-black mb-1 text-gray-900">{t.modalTitle}</h3>
                 <p className="text-gray-500 text-[10px] mb-6 leading-relaxed">{t.modalBody}</p>
                 <div className="flex gap-3">
-                    <button onClick={() => setShowResetModal(false)} className="flex-1 py-2 text-[10px] text-gray-500 font-bold hover:bg-gray-50 rounded-lg">{t.modalCancel}</button>
-                    <button onClick={resetGame} className="flex-1 py-2 bg-red-600 text-white text-[10px] font-black rounded-lg shadow-lg shadow-red-200">{t.modalConfirm}</button>
+                    <button onClick={() => setShowResetModal(false)} className="flex-1 py-2 text-[10px] text-gray-500 font-bold hover:bg-gray-50 rounded-lg transition-colors">{t.modalCancel}</button>
+                    <button onClick={resetGame} className="flex-1 py-2 bg-red-600 text-white text-[10px] font-black rounded-lg shadow-lg active:scale-95 transition-all">{t.modalConfirm}</button>
                 </div>
             </div>
         </div>
