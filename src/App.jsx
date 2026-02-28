@@ -149,6 +149,7 @@ export default function App() {
   
   // New state to hold dynamic usernames
   const [playerNames, setPlayerNames] = useState({ 1: '', 2: '' });
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
 
   const t = i18n[lang];
 
@@ -464,34 +465,42 @@ export default function App() {
   // --- 4. START ROOM WITH RANDOM ROLE (NEW ADDON) ---
   const startOnlineRoom = async () => {
     if (!user) { setIsAuthModalOpen(true); return; }
-    if (!db) return;
+    if (!db) { showFlashMessage("Database connecting..."); return; }
     
-    const newRoomId = Math.random().toString(36).substring(2, 9);
-    const hostIsBlack = Math.random() > 0.5; // Randomize Host Color
-    const assignedRole = hostIsBlack ? 1 : 2;
-    const name = getPlayerName(user);
+    setIsCreatingRoom(true);
+    try {
+      const newRoomId = Math.random().toString(36).substring(2, 9);
+      const hostIsBlack = Math.random() > 0.5; // Randomize Host Color
+      const assignedRole = hostIsBlack ? 1 : 2;
+      const name = getPlayerName(user);
 
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
-    
-    // Create the document with names and IDs
-    await setDoc(roomRef, {
-      board: JSON.stringify(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0))),
-      currentPlayer: 1, 
-      captures: { 1: 0, 2: 0 }, 
-      isGameOver: false,
-      gameMode, 
-      passCount: 0, 
-      lastMoveBy: user.uid, 
-      createdAt: Date.now(),
-      player1Id: hostIsBlack ? user.uid : null,
-      player2Id: !hostIsBlack ? user.uid : null,
-      player1Name: hostIsBlack ? name : null,
-      player2Name: !hostIsBlack ? name : null
-    });
-    
-    setRoomId(newRoomId);
-    setPlayerRole(assignedRole); 
-    resetGame();
+      const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
+      
+      // Create the document with names and IDs
+      await setDoc(roomRef, {
+        board: JSON.stringify(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0))),
+        currentPlayer: 1, 
+        captures: { 1: 0, 2: 0 }, 
+        isGameOver: false,
+        gameMode, 
+        passCount: 0, 
+        lastMoveBy: user.uid, 
+        createdAt: Date.now(),
+        player1Id: hostIsBlack ? user.uid : null,
+        player2Id: !hostIsBlack ? user.uid : null,
+        player1Name: hostIsBlack ? name : null,
+        player2Name: !hostIsBlack ? name : null
+      });
+      
+      setRoomId(newRoomId);
+      setPlayerRole(assignedRole); 
+      resetGame();
+    } catch (error) {
+      console.error("Room creation failed:", error);
+      showFlashMessage("Error creating room. Please try again!");
+    } finally {
+      setIsCreatingRoom(false);
+    }
   };
 
   // --- 5. MODERN COPY API (NEW ADDON) ---
@@ -559,8 +568,8 @@ export default function App() {
           {/* LEFT: Room Controls */}
           <div className="flex items-center gap-2">
             {!roomId ? (
-              <button onClick={startOnlineRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all">
-                <Globe size={14} /> {t.playOnline}
+              <button onClick={startOnlineRoom} disabled={isCreatingRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all disabled:opacity-50">
+                <Globe size={14} className={isCreatingRoom ? "animate-spin" : ""} /> {isCreatingRoom ? "Connecting..." : t.playOnline}
               </button>
             ) : (
               <div className="flex items-center gap-2">
