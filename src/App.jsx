@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { Instagram, RotateCcw, ChevronRight, Undo2, Trophy } from 'lucide-react';
 
 // --- TRANSLATIONS ---
@@ -9,22 +9,23 @@ const i18n = {
     white: "White",
     territory: "Territory",
     caps: "Caps",
-    pointsRemaining: "Points Remaining",
+    pointsRemaining: "Remaining",
+    totalScore: "Total Score",
     turnSuffix: "'s Turn",
     passBtn: "Pass",
-    resetBtn: "Reset Game",
+    resetBtn: "Reset",
     undoBtn: "Undo",
-    rules: "<b>Scoring:</b> Points = Territory + Captures. White receives 6.5 points (Komi) to compensate for going second.",
+    rules: "<b>Scoring:</b> Total = Territory + Captures. White gets 6.5 Komi.",
     modalTitle: "Reset Game?",
-    modalBody: "This will clear the board and reset all scores. This cannot be undone.",
+    modalBody: "Clear board and scores? This cannot be undone.",
     modalCancel: "Cancel",
-    modalConfirm: "Reset Now",
-    suicideMsg: "Suicide move is not allowed!",
-    koMsg: "Ko rule: Cannot repeat position.",
+    modalConfirm: "Reset",
+    suicideMsg: "Suicide move blocked!",
+    koMsg: "Ko rule: Position repeat blocked.",
     gameOver: "Game Over! {winner} wins {b} to {w}",
     passedMsg: "{player} passed.",
     resetNotify: "Game Reset",
-    undoNotify: "Move Undone"
+    undoNotify: "Undone"
   },
   pt: {
     title: "Atari GO (9x9)",
@@ -32,37 +33,35 @@ const i18n = {
     white: "Branco",
     territory: "Território",
     caps: "Capturas",
-    pointsRemaining: "Pontos Restantes",
+    pointsRemaining: "Restante",
+    totalScore: "Pontuação Total",
     turnSuffix: " - Sua vez",
     passBtn: "Passar",
     resetBtn: "Reiniciar",
     undoBtn: "Desfazer",
-    rules: "<b>Pontuação:</b> Pontos = Território + Capturas. O Branco recebe 6.5 pontos (Komi) por começar em segundo.",
-    modalTitle: "Reiniciar Jogo?",
-    modalBody: "Isso limpará o tabuleiro e resetará os pontos. Não pode ser desfeito.",
+    rules: "<b>Pontos:</b> Total = Território + Capturas. Branco recebe 6.5 Komi.",
+    modalTitle: "Reiniciar?",
+    modalBody: "Limpar tabuleiro e pontos? Não pode ser desfeito.",
     modalCancel: "Cancelar",
     modalConfirm: "Confirmar",
-    suicideMsg: "Jogada suicida não é permitida!",
-    koMsg: "Regra Ko: Não pode repetir a posição.",
-    gameOver: "Fim de Jogo! {winner} vence por {b} a {w}",
+    suicideMsg: "Jogada suicida bloqueada!",
+    koMsg: "Regra Ko: Repetição bloqueada.",
+    gameOver: "Fim! {winner} vence por {b} a {w}",
     passedMsg: "{player} passou.",
-    resetNotify: "Jogo Reiniciado",
-    undoNotify: "Jogada Desfeita"
+    resetNotify: "Reiniciado",
+    undoNotify: "Desfeito"
   }
 };
 
 const SIZE = 9;
 const KOMI = 6.5;
 
-// Custom Logo Component for Atari GO with Stone Dots
+// Custom Logo Component with Stone Dots
 const Logo = () => (
-  <div className="flex items-center gap-2 mb-2 group">
+  <div className="flex items-center gap-2 mb-2 group select-none">
     <div className="relative w-10 h-10 flex items-center justify-center">
-      {/* Background Circle */}
       <div className="absolute inset-0 bg-black rounded-full shadow-lg group-hover:rotate-12 transition-transform duration-300"></div>
       <div className="absolute inset-1 border border-white border-opacity-10 rounded-full"></div>
-      
-      {/* Visual Stone Dots Pattern */}
       <div className="relative z-10 grid grid-cols-2 gap-1.5 p-1">
         <div className="w-2 h-2 rounded-full bg-white shadow-sm"></div>
         <div className="w-2 h-2 rounded-full bg-gray-600"></div>
@@ -70,14 +69,33 @@ const Logo = () => (
         <div className="w-2 h-2 rounded-full bg-white shadow-sm"></div>
       </div>
     </div>
-    <div className="flex flex-col leading-none">
-      <span className="text-xl font-black text-gray-800 tracking-tighter">ATARI GO</span>
-      <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Mastery Edition</span>
+    <div className="flex flex-col leading-none text-left">
+      <span className="text-xl font-black text-gray-800 tracking-tighter uppercase">Atari GO</span>
+      <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">OG Strategy</span>
     </div>
   </div>
 );
 
 export default function App() {
+  // --- SEO & CANONICAL SYNC ---
+  useEffect(() => {
+    const siteUrl = "https://atari-go.vercel.app/";
+    document.title = "Atari GO - Play 9x9 Strategic Go Online";
+    
+    const metaDesc = document.querySelector('meta[name="description"]') || document.createElement('meta');
+    metaDesc.name = "description";
+    metaDesc.content = "Play Atari GO (9x9), the ultimate strategic board game. Master territory surrounding and stone capturing. Created by OG.";
+    if (!metaDesc.parentNode) document.head.appendChild(metaDesc);
+
+    let canonical = document.querySelector('link[rel="canonical"]');
+    if (!canonical) {
+      canonical = document.createElement('link');
+      canonical.rel = 'canonical';
+      document.head.appendChild(canonical);
+    }
+    canonical.href = siteUrl;
+  }, []);
+
   // --- STATE ---
   const [board, setBoard] = useState(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
   const [currentPlayer, setCurrentPlayer] = useState(1);
@@ -92,15 +110,17 @@ export default function App() {
   const t = i18n[lang];
 
   // --- LOGIC HELPERS ---
-  const getLiberties = useCallback((tempBoard, r, c) => {
+  const findGroupAndLiberties = useCallback((tempBoard, r, c) => {
     const color = tempBoard[r][c];
-    if (color === 0) return [];
+    if (color === 0) return { group: [], liberties: [] };
     const queue = [{ r, c }];
     const visited = new Set([`${r},${c}`]);
+    const group = [];
     const liberties = new Set();
 
     while (queue.length > 0) {
       const curr = queue.shift();
+      group.push(curr);
       const neighbors = [{ r: curr.r - 1, c: curr.c }, { r: curr.r + 1, c: curr.c }, { r: curr.r, c: curr.c - 1 }, { r: curr.r, c: curr.c + 1 }];
       for (const n of neighbors) {
         if (n.r >= 0 && n.r < SIZE && n.c >= 0 && n.c < SIZE) {
@@ -112,40 +132,23 @@ export default function App() {
         }
       }
     }
-    return Array.from(liberties);
+    return { group, liberties: Array.from(liberties) };
   }, []);
 
-  const findCaptures = useCallback((tempBoard, color) => {
+  const findCaptures = useCallback((tempBoard, opponentColor) => {
     const captured = [];
     const processed = new Set();
     for (let r = 0; r < SIZE; r++) {
       for (let c = 0; c < SIZE; c++) {
-        if (tempBoard[r][c] === color && !processed.has(`${r},${c}`)) {
-          const group = [];
-          const queue = [{ r, c }];
-          const visited = new Set([`${r},${c}`]);
-          let hasLiberty = false;
-          while (queue.length > 0) {
-            const curr = queue.shift();
-            group.push(curr);
-            processed.add(`${curr.r},${curr.c}`);
-            const neighbors = [{ r: curr.r - 1, c: curr.c }, { r: curr.r + 1, c: curr.c }, { r: curr.r, c: curr.c - 1 }, { r: curr.r, c: curr.c + 1 }];
-            for (const n of neighbors) {
-              if (n.r >= 0 && n.r < SIZE && n.c >= 0 && n.c < SIZE) {
-                if (tempBoard[n.r][n.c] === 0) hasLiberty = true;
-                else if (tempBoard[n.r][n.c] === color && !visited.has(`${n.r},${n.c}`)) {
-                  visited.add(`${n.r},${n.c}`);
-                  queue.push(n);
-                }
-              }
-            }
-          }
-          if (!hasLiberty) captured.push(...group);
+        if (tempBoard[r][c] === opponentColor && !processed.has(`${r},${c}`)) {
+          const { group, liberties } = findGroupAndLiberties(tempBoard, r, c);
+          group.forEach(stone => processed.add(`${stone.r},${stone.c}`));
+          if (liberties.length === 0) captured.push(...group);
         }
       }
     }
     return captured;
-  }, []);
+  }, [findGroupAndLiberties]);
 
   const scoreData = useMemo(() => {
     let blackTerritory = 0;
@@ -189,17 +192,7 @@ export default function App() {
   // --- ACTIONS ---
   const showFlashMessage = (msg) => {
     setMessage(msg);
-    setTimeout(() => setMessage(''), 3000);
-  };
-
-  const saveToHistory = () => {
-    const snapshot = {
-      board: board.map(row => [...row]),
-      currentPlayer,
-      captures: { ...captures },
-      lastBoardState
-    };
-    setHistory(prev => [...prev, snapshot]);
+    setTimeout(() => setMessage(''), 2500);
   };
 
   const handleMove = (r, c) => {
@@ -208,12 +201,16 @@ export default function App() {
     const testBoard = board.map(row => [...row]);
     testBoard[r][c] = currentPlayer;
     const opponent = currentPlayer === 1 ? 2 : 1;
+    
     const captured = findCaptures(testBoard, opponent);
     captured.forEach(pos => testBoard[pos.r][pos.c] = 0);
 
-    if (captured.length === 0 && getLiberties(testBoard, r, c).length === 0) {
-      showFlashMessage(t.suicideMsg);
-      return;
+    if (captured.length === 0) {
+      const { liberties } = findGroupAndLiberties(testBoard, r, c);
+      if (liberties.length === 0) {
+        showFlashMessage(t.suicideMsg);
+        return;
+      }
     }
 
     const boardString = JSON.stringify(testBoard);
@@ -222,7 +219,13 @@ export default function App() {
       return;
     }
 
-    saveToHistory();
+    setHistory(prev => [...prev, {
+      board: board.map(row => [...row]),
+      currentPlayer,
+      captures: { ...captures },
+      lastBoardState
+    }]);
+
     setLastBoardState(JSON.stringify(board));
     setBoard(testBoard);
     setCaptures(prev => ({ ...prev, [currentPlayer]: prev[currentPlayer] + captured.length }));
@@ -232,28 +235,32 @@ export default function App() {
 
   const undoMove = () => {
     if (history.length === 0) return;
-    const lastState = history[history.length - 1];
-    setBoard(lastState.board);
-    setCurrentPlayer(lastState.currentPlayer);
-    setCaptures(lastState.captures);
-    setLastBoardState(lastState.lastBoardState);
+    const last = history[history.length - 1];
+    setBoard(last.board);
+    setCurrentPlayer(last.currentPlayer);
+    setCaptures(last.captures);
+    setLastBoardState(last.lastBoardState);
     setHistory(prev => prev.slice(0, -1));
     showFlashMessage(t.undoNotify);
   };
 
   const handlePass = () => {
-    saveToHistory();
-    const nextPassCount = passCount + 1;
-    const playerJustPassed = currentPlayer === 1 ? t.black : t.white;
-    if (nextPassCount >= 2) {
+    setHistory(prev => [...prev, {
+      board: board.map(row => [...row]),
+      currentPlayer,
+      captures: { ...captures },
+      lastBoardState
+    }]);
+    const nextPass = passCount + 1;
+    if (nextPass >= 2) {
       const b = scoreData.blackTerritory + captures[1];
       const w = scoreData.whiteTerritory + captures[2] + KOMI;
-      const winnerLabel = b > w ? t.black : t.white;
-      showFlashMessage(t.gameOver.replace('{winner}', winnerLabel).replace('{b}', b).replace('{w}', w));
+      const winner = b > w ? t.black : t.white;
+      showFlashMessage(t.gameOver.replace('{winner}', winner).replace('{b}', b.toFixed(1)).replace('{w}', w.toFixed(1)));
     } else {
-      showFlashMessage(t.passedMsg.replace('{player}', playerJustPassed));
+      showFlashMessage(t.passedMsg.replace('{player}', currentPlayer === 1 ? t.black : t.white));
     }
-    setPassCount(nextPassCount);
+    setPassCount(nextPass);
     setCurrentPlayer(currentPlayer === 1 ? 2 : 1);
   };
 
@@ -261,7 +268,6 @@ export default function App() {
     setBoard(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
     setCurrentPlayer(1);
     setCaptures({ 1: 0, 2: 0 });
-    setLastBoardState(null);
     setHistory([]);
     setPassCount(0);
     setShowResetModal(false);
@@ -271,62 +277,64 @@ export default function App() {
   const isHoshi = (r, c) => [[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]].some(p => p[0] === r && p[1] === c);
 
   return (
-    <div className="flex flex-col items-center justify-start min-h-screen p-4 bg-gray-100 font-sans sm:pt-12">
+    <div className="flex flex-col items-center justify-start min-h-screen bg-gray-100 font-sans p-2 sm:p-4 pb-20 sm:pt-12">
       
-      {/* Language Switcher */}
-      <div className="fixed top-4 right-4 z-[50] flex bg-white rounded-lg shadow-md border border-gray-200 overflow-hidden">
+      {/* Mobile-Friendly Language Toggle */}
+      <div className="fixed top-2 right-2 z-50 flex bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         {['en', 'pt'].map(l => (
           <button 
             key={l}
             onClick={() => setLang(l)}
-            className={`px-3 py-1.5 text-xs font-bold transition-colors ${lang === l ? 'bg-blue-500 text-white' : 'hover:bg-gray-50'}`}
+            className={`px-2.5 py-1.5 text-[10px] font-bold transition-colors ${lang === l ? 'bg-blue-600 text-white' : 'hover:bg-gray-50 text-gray-600'}`}
           >
             {l.toUpperCase()}
           </button>
         ))}
       </div>
 
-      <div className="max-w-2xl w-full bg-white rounded-2xl shadow-xl flex flex-col items-center p-4 sm:p-6 border border-gray-200 mb-8">
+      <div className="max-w-xl w-full bg-white rounded-2xl shadow-xl flex flex-col items-center p-3 sm:p-6 border border-gray-200">
         <Logo />
         
-        {/* Scoreboard */}
-        <div className="grid grid-cols-3 w-full mb-6 px-3 bg-gray-50 py-4 rounded-xl border border-gray-200">
-          <div className="flex flex-col items-start">
-            <div className="flex items-center gap-1.5 mb-1">
-              <div className={`w-3 h-3 rounded-full bg-black shadow-sm ${currentPlayer === 1 ? 'ring-4 ring-blue-400 ring-opacity-50' : ''}`}></div>
-              <span className="font-bold text-xs text-gray-700">{t.black}</span>
+        {/* Scoreboard - Optimized for Mobile Viewports */}
+        <div className="grid grid-cols-3 w-full mb-4 px-2 bg-gray-50 py-3 rounded-xl border border-gray-200 gap-1">
+          <div className="flex flex-col items-start min-w-0">
+            <div className="flex items-center gap-1 mb-1">
+              <div className={`w-2.5 h-2.5 rounded-full bg-black shadow-sm ${currentPlayer === 1 ? 'ring-2 ring-blue-400' : ''}`}></div>
+              <span className="font-bold text-[10px] sm:text-xs truncate">{t.black}</span>
             </div>
-            <p className="text-[9px] text-gray-500">{t.territory}: {scoreData.blackTerritory}</p>
-            <p className="text-base font-black text-black">{(scoreData.blackTerritory + captures[1]).toFixed(1)} <span className="text-[9px] font-normal opacity-50">pts</span></p>
+            <p className="text-[8px] sm:text-[9px] text-gray-500 whitespace-nowrap">{t.territory}: {scoreData.blackTerritory}</p>
+            <p className="text-[8px] sm:text-[9px] text-gray-500 whitespace-nowrap">{t.caps}: {captures[1]}</p>
+            <p className="text-sm sm:text-base font-black text-black">{(scoreData.blackTerritory + captures[1]).toFixed(1)}</p>
           </div>
 
-          <div className="flex flex-col items-center justify-center border-x border-gray-200">
-            <div className="text-[9px] font-black text-blue-600 uppercase tracking-widest mb-0.5">
+          <div className="flex flex-col items-center justify-center border-x border-gray-200 text-center">
+            <div className="text-[8px] font-black text-blue-600 uppercase tracking-tighter mb-0.5 truncate w-full">
               {currentPlayer === 1 ? t.black : t.white}{t.turnSuffix}
             </div>
-            <div className="text-[8px] text-gray-400 font-bold uppercase">
+            <div className="text-[7px] text-gray-400 font-bold uppercase whitespace-nowrap">
               {scoreData.emptyCount} {t.pointsRemaining}
             </div>
           </div>
 
-          <div className="flex flex-col items-end text-right">
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="font-bold text-xs text-gray-700">{t.white}</span>
-              <div className={`w-3 h-3 rounded-full bg-white border border-gray-300 shadow-sm ${currentPlayer === 2 ? 'ring-4 ring-blue-400 ring-opacity-50' : ''}`}></div>
+          <div className="flex flex-col items-end text-right min-w-0">
+            <div className="flex items-center gap-1 mb-1">
+              <span className="font-bold text-[10px] sm:text-xs truncate">{t.white}</span>
+              <div className={`w-2.5 h-2.5 rounded-full bg-white border border-gray-300 shadow-sm ${currentPlayer === 2 ? 'ring-2 ring-blue-400' : ''}`}></div>
             </div>
-            <p className="text-[9px] text-gray-500">{t.territory}: {scoreData.whiteTerritory}</p>
-            <p className="text-base font-black text-gray-700">{(scoreData.whiteTerritory + captures[2] + KOMI).toFixed(1)} <span className="text-[9px] font-normal opacity-50">pts</span></p>
+            <p className="text-[8px] sm:text-[9px] text-gray-500 whitespace-nowrap">{t.territory}: {scoreData.whiteTerritory}</p>
+            <p className="text-[8px] sm:text-[9px] text-gray-500 whitespace-nowrap">{t.caps}: {captures[2]}</p>
+            <p className="text-sm sm:text-base font-black text-gray-700">{(scoreData.whiteTerritory + captures[2] + KOMI).toFixed(1)}</p>
           </div>
         </div>
 
-        {/* Board Container */}
-        <div className="relative p-3 sm:p-6 rounded-xl shadow-lg overflow-hidden mb-6 select-none touch-none">
-            <div className="absolute inset-0 bg-[#dbb06d]" style={{backgroundImage: 'url("https://www.transparenttextures.com/patterns/wood-pattern.png")'}}></div>
+        {/* Board - Fixed Scroll Jump with Stable Container */}
+        <div className="relative p-2 sm:p-4 rounded-xl shadow-inner mb-4 select-none touch-none bg-[#dbb06d] border-4 border-[#c19a5b]">
+            <div className="absolute inset-0 opacity-40 pointer-events-none" style={{backgroundImage: 'url("https://www.transparenttextures.com/patterns/wood-pattern.png")'}}></div>
             <div className="relative z-10">
-                <div className="grid grid-cols-8 grid-rows-8 w-[280px] h-[280px] sm:w-[380px] sm:h-[380px] border border-black border-opacity-70">
-                    {Array(64).fill(0).map((_, i) => <div key={i} className="border-[0.5px] border-black border-opacity-40"></div>)}
+                <div className="grid grid-cols-8 grid-rows-8 w-[260px] h-[260px] sm:w-[360px] sm:h-[360px] border border-black border-opacity-70">
+                    {Array(64).fill(0).map((_, i) => <div key={i} className="border-[0.5px] border-black border-opacity-30"></div>)}
                 </div>
-                <div className="absolute top-0 left-0 w-[280px] h-[280px] sm:w-[380px] sm:h-[380px]">
+                <div className="absolute top-0 left-0 w-[260px] h-[260px] sm:w-[360px] sm:h-[360px]">
                     {board.map((row, r) => row.map((cell, c) => (
                         <div 
                             key={`${r}-${c}`}
@@ -341,10 +349,10 @@ export default function App() {
                                 zIndex: 20
                             }}
                         >
-                            {isHoshi(r, c) && cell === 0 && <div className="absolute w-1.5 h-1.5 bg-black bg-opacity-70 rounded-full"></div>}
-                            {cell === 0 && <div className={`w-4/5 h-4/5 rounded-full opacity-0 group-hover/cell:opacity-40 transition-opacity ${currentPlayer === 1 ? 'bg-black' : 'bg-white border'}`}></div>}
+                            {isHoshi(r, c) && cell === 0 && <div className="absolute w-1 h-1 bg-black bg-opacity-60 rounded-full"></div>}
+                            {cell === 0 && <div className={`w-4/5 h-4/5 rounded-full opacity-0 group-hover/cell:opacity-30 transition-opacity ${currentPlayer === 1 ? 'bg-black' : 'bg-white border'}`}></div>}
                             {cell !== 0 && (
-                                <div className={`w-[92%] h-[92%] rounded-full shadow-md transform scale-100 animate-in fade-in zoom-in duration-200 ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'}`}></div>
+                                <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in fade-in zoom-in duration-200 ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'}`}></div>
                             )}
                         </div>
                     )))}
@@ -352,57 +360,54 @@ export default function App() {
             </div>
         </div>
 
-        {/* Messaging */}
-        <div className="h-8 mb-4 flex items-center justify-center">
-            {message && <div className="px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-[10px] font-bold border border-blue-100 animate-pulse uppercase tracking-wider">{message}</div>}
+        {/* HUD Messaging Area */}
+        <div className="h-6 mb-2 flex items-center justify-center">
+            {message && <div className="px-3 py-0.5 bg-blue-600 text-white rounded-full text-[9px] font-bold shadow-sm animate-pulse whitespace-nowrap">{message}</div>}
         </div>
 
-        {/* Buttons */}
-        <div className="grid grid-cols-3 gap-2 w-full max-w-sm px-2">
-            <button onClick={undoMove} disabled={history.length === 0} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 hover:border-blue-400 rounded-xl text-gray-700 transition-all active:scale-95 disabled:opacity-30 disabled:pointer-events-none">
-                <Undo2 size={16} /><span className="text-[10px] font-bold mt-0.5">{t.undoBtn}</span>
+        {/* Action Controls - Mobile Optimized Grid */}
+        <div className="grid grid-cols-3 gap-2 w-full max-w-sm">
+            <button onClick={undoMove} disabled={history.length === 0} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm">
+                <Undo2 size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 text-gray-500 uppercase">{t.undoBtn}</span>
             </button>
-            <button onClick={handlePass} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 hover:border-blue-400 rounded-xl text-gray-700 transition-all active:scale-95">
-                <ChevronRight size={16} /><span className="text-[10px] font-bold mt-0.5">{t.passBtn}</span>
+            <button onClick={handlePass} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 active:scale-95 transition-all shadow-sm">
+                <ChevronRight size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 text-gray-500 uppercase">{t.passBtn}</span>
             </button>
-            <button onClick={() => setShowResetModal(true)} className="flex flex-col items-center justify-center py-2 bg-red-50 text-red-600 border border-red-100 rounded-xl transition-all active:scale-95">
-                <RotateCcw size={16} /><span className="text-[10px] font-bold mt-0.5">{t.resetBtn}</span>
+            <button onClick={() => setShowResetModal(true)} className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 active:scale-95 transition-all shadow-sm">
+                <RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span>
             </button>
         </div>
 
-        {/* Footer Credit */}
-        <div className="w-full mt-8 pt-6 border-t border-gray-100 flex flex-col items-center">
-            <div className="max-w-sm text-center text-[9px] text-gray-400 mb-6 leading-relaxed" dangerouslySetInnerHTML={{ __html: t.rules }}></div>
+        {/* Global Footer & Branding */}
+        <div className="w-full mt-6 pt-4 border-t border-gray-100 flex flex-col items-center">
+            <div className="text-center text-[8px] text-gray-400 mb-4 leading-tight max-w-[200px] sm:max-w-none" dangerouslySetInnerHTML={{ __html: t.rules }}></div>
             
-            <div className="w-full py-4 bg-gray-50 rounded-xl flex flex-col items-center gap-1.5 border border-gray-100">
-                <div className="flex items-center gap-1.5">
-                    <Trophy size={10} className="text-yellow-600" />
-                    <p className="text-[10px] text-gray-500 uppercase tracking-[0.2em] font-black">
-                        Created by <span className="text-gray-800">OG</span>
-                    </p>
-                </div>
+            <div className="w-full py-3 bg-gray-50 rounded-xl flex flex-col items-center gap-1 border border-gray-200">
+                <p className="text-[8px] text-gray-400 uppercase tracking-widest font-black flex items-center gap-1">
+                    <Trophy size={8} className="text-yellow-600" /> CREATED BY <span className="text-gray-700 font-bold">OG</span>
+                </p>
                 <a 
                     href="https://www.instagram.com/0g_2k6?igsh=dWE1cnQ1cjUwenJi" 
                     target="_blank" 
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-full shadow-sm border border-gray-200 hover:border-pink-500 hover:text-pink-500 transition-all text-[11px] font-bold text-gray-700 group"
+                    className="flex items-center gap-1 px-3 py-1 bg-white rounded-full shadow-sm border border-gray-200 hover:text-pink-600 transition-all text-[10px] font-bold text-gray-700 group"
                 >
-                    <Instagram size={12} className="group-hover:rotate-12 transition-transform" />
+                    <Instagram size={10} className="group-hover:rotate-12 transition-transform" />
                     <span>@0g_2k6</span>
                 </a>
             </div>
         </div>
       </div>
 
-      {/* Reset Modal */}
+      {/* Modern Reset Confirmation Modal */}
       {showResetModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-xs w-full animate-in zoom-in slide-in-from-bottom-4 duration-200">
-                <h3 className="text-lg font-black mb-1 text-gray-900">{t.modalTitle}</h3>
-                <p className="text-gray-500 text-xs mb-6 leading-relaxed">{t.modalBody}</p>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-[2px] p-4">
+            <div className="bg-white rounded-2xl shadow-2xl p-5 max-w-[280px] w-full animate-in zoom-in slide-in-from-bottom-2 duration-200">
+                <h3 className="text-base font-black mb-1 text-gray-900">{t.modalTitle}</h3>
+                <p className="text-gray-500 text-[10px] mb-6 leading-relaxed">{t.modalBody}</p>
                 <div className="flex gap-3">
-                    <button onClick={() => setShowResetModal(false)} className="flex-1 py-2.5 text-xs text-gray-500 font-bold hover:bg-gray-50 rounded-lg">{t.modalCancel}</button>
-                    <button onClick={resetGame} className="flex-1 py-2.5 bg-red-500 text-white text-xs font-black rounded-lg shadow-lg shadow-red-200">{t.modalConfirm}</button>
+                    <button onClick={() => setShowResetModal(false)} className="flex-1 py-2 text-[10px] text-gray-500 font-bold hover:bg-gray-50 rounded-lg">{t.modalCancel}</button>
+                    <button onClick={resetGame} className="flex-1 py-2 bg-red-600 text-white text-[10px] font-black rounded-lg shadow-lg shadow-red-200">{t.modalConfirm}</button>
                 </div>
             </div>
         </div>
