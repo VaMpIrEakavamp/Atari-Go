@@ -439,9 +439,11 @@ export default function App() {
       if (authMode === 'signup') {
         const cred = await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
         await updateProfile(cred.user, { displayName: authForm.username });
+        setUser({ ...cred.user, displayName: authForm.username }); // Force name update in UI
       } else {
         await signInWithEmailAndPassword(auth, authForm.email, authForm.password);
       }
+      setIsAuthModalOpen(false); // Force close modal on success
     } catch (err) {
       setAuthErrorMsg(t.authError);
     } finally {
@@ -449,8 +451,11 @@ export default function App() {
     }
   };
 
-  const handleSignOut = useCallback(() => {
-    if (auth) signOut(auth);
+  const handleSignOut = useCallback(async () => {
+    if (auth) {
+      await signOut(auth);
+      await signInAnonymously(auth); // Fallback to guest so online play still works
+    }
     setRoomId(null);
     setPlayerRole(null);
     resetGame();
@@ -548,30 +553,43 @@ export default function App() {
                 ))}
             </div>
         </div>
-        <div className="flex flex-wrap gap-2 justify-center items-center">
-            {!user ? (
-                <button onClick={() => setIsAuthModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-md active:scale-95">
-                    <LogIn size={14} /> {t.playOnline}
-                </button>
-            ) : !roomId ? (
-                <div className="flex items-center gap-2">
-                    <button onClick={startOnlineRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-xl text-xs font-bold shadow-md active:scale-95">
-                        <Globe size={14} /> {t.playOnline}
-                    </button>
-                    <button onClick={handleSignOut} className="px-3 py-2 bg-white border border-gray-200 text-gray-500 rounded-xl hover:text-red-500 transition-colors">
-                        <LogOut size={14} />
-                    </button>
-                </div>
+        
+        {/* --- NEW AUTH & ROOM CONTROLS UI --- */}
+        <div className="flex flex-col sm:flex-row gap-2 w-full justify-between items-center bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
+          {/* LEFT: Room Controls */}
+          <div className="flex items-center gap-2">
+            {!roomId ? (
+              <button onClick={startOnlineRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all">
+                <Globe size={14} /> {t.playOnline}
+              </button>
             ) : (
-                <div className="flex items-center gap-2">
-                    <button onClick={copyRoomLink} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-md">
-                        {isCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />} {isCopied ? t.linkCopied : t.copyLink}
-                    </button>
-                    <button onClick={() => { setRoomId(null); setPlayerRole(null); resetGame(); window.history.replaceState({}, '', window.location.pathname); }} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-xl text-xs font-bold">
-                        {t.localMode}
-                    </button>
-                </div>
+              <div className="flex items-center gap-2">
+                <button onClick={copyRoomLink} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all">
+                  {isCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />} {isCopied ? t.linkCopied : t.copyLink}
+                </button>
+                <button onClick={() => { setRoomId(null); setPlayerRole(null); resetGame(); window.history.replaceState({}, '', window.location.pathname); }} className="px-3 py-2 bg-gray-100 text-gray-600 rounded-lg text-xs font-bold hover:bg-red-50 hover:text-red-600 transition-all">
+                  {t.localMode}
+                </button>
+              </div>
             )}
+          </div>
+
+          {/* RIGHT: User Profile / Auth */}
+          <div className="flex items-center gap-2">
+            {user && !user.isAnonymous ? (
+              <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
+                <User size={14} className="text-indigo-600" />
+                <span className="text-xs font-bold text-gray-700 truncate max-w-[100px]">{getPlayerName(user)}</span>
+                <button onClick={handleSignOut} className="ml-1 text-gray-400 hover:text-red-500 transition-colors" title="Log Out">
+                  <LogOut size={14} />
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => setIsAuthModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-xs font-bold transition-all">
+                <LogIn size={14} /> {t.signIn}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
