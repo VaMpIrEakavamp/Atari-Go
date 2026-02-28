@@ -10,25 +10,32 @@ import {
   createUserWithEmailAndPassword, signOut, updateProfile,
   signInAnonymously, signInWithCustomToken
 } from 'firebase/auth';
-import { getFirestore, doc, onSnapshot, updateDoc, setDoc, getDoc } from 'firebase/firestore';
+import { getFirestore, doc, onSnapshot, updateDoc, setDoc } from 'firebase/firestore';
 
 // --- SECURE CONFIGURATION LOADER ---
-// Refactored to avoid "import.meta" warnings in legacy target environments.
-// It prioritizes the system-provided __firebase_config for production stability.
+// This loader handles the transition between local and production without crashing.
 const getFirebaseConfig = () => {
-  // 1. Production Path: Injected by the platform
+  // 1. Production Path (Vercel)
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
     try {
-      return JSON.parse(__firebase_config);
+      // Ensure we handle both string and object forms safely
+      return typeof __firebase_config === 'string' ? JSON.parse(__firebase_config) : __firebase_config;
     } catch (e) {
-      console.error("Critical: Production config parse error", e);
+      console.error("Config Error: Ensure your Vercel __firebase_config is valid JSON.", e);
     }
   }
 
-  // 2. Default/Local Fallback
-  // Note: We avoid accessing import.meta directly to ensure ES2015 compatibility.
+  // 2. Local Fallback (Vite)
+  // We use a safe check to avoid "import.meta" build warnings.
+  let localKey = "";
+  try {
+    // This is wrapped to prevent ES2015 target environment crashes
+    const meta = JSON.parse(JSON.stringify(import.meta));
+    if (meta && meta.env) localKey = meta.env.VITE_FIREBASE_API_KEY;
+  } catch (e) {}
+
   return {
-    apiKey: "", // Should be provided via __firebase_config for online functionality
+    apiKey: localKey || "",
     authDomain: "atari-go-business.firebaseapp.com",
     projectId: "atari-go-business",
     storageBucket: "atari-go-business.firebasestorage.app",
@@ -38,12 +45,19 @@ const getFirebaseConfig = () => {
   };
 };
 
+// --- GLOBAL SERVICES INIT ---
+let app, auth, db;
 const firebaseConfig = getFirebaseConfig();
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'atari-go-production-v1';
 
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (error) {
+  console.error("Firebase Init Failed:", error);
+}
+
+const appId = 'atari-go-production-v1';
 const SIZE = 9;
 const KOMI = 6.5;
 
@@ -183,23 +197,20 @@ export default function App() {
     setTimeout(() => setMessage(''), 3000);
   }, []);
 
-  // One-time Init & Auth Listener (Mandatory Rule 3)
   useEffect(() => {
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
+    if (!auth) return;
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) {
+        setIsAuthModalOpen(false);
+        setAuthErrorMsg('');
       }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    });
     return () => unsubscribe();
   }, []);
 
-  // Data Fetching (Separate useEffect, Guarded by User)
   useEffect(() => {
-    if (!user || !roomId) return;
+    if (!user || !roomId || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
     const unsubscribe = onSnapshot(roomRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -219,7 +230,7 @@ export default function App() {
   }, [user, roomId, showFlashMessage]);
 
   const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "") => {
-    if (!roomId || !user) return;
+    if (!roomId || !user || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
     try {
       await updateDoc(roomRef, {
@@ -391,6 +402,7 @@ export default function App() {
 
   const handleAuth = async (e) => {
     e.preventDefault();
+    if (!auth) return;
     setAuthLoading(true);
     setAuthErrorMsg('');
     try {
@@ -408,14 +420,15 @@ export default function App() {
   };
 
   const handleSignOut = useCallback(() => {
-    signOut(auth);
+    if (auth) signOut(auth);
     setRoomId(null);
     setPlayerRole(null);
     resetGame();
   }, [resetGame]);
 
   const startOnlineRoom = async () => {
-    if (!user || user.isAnonymous) { setIsAuthModalOpen(true); return; }
+    if (!user) { setIsAuthModalOpen(true); return; }
+    if (!db) return;
     const newRoomId = Math.random().toString(36).substring(2, 9);
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
     await setDoc(roomRef, {
@@ -430,7 +443,7 @@ export default function App() {
 
   const copyRoomLink = () => {
     const link = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
-    // Fallback for copy command in iframe/restricted environments
+    // Fallback for clipboard in iframe
     const textArea = document.createElement("textarea");
     textArea.value = link;
     document.body.appendChild(textArea);
@@ -439,11 +452,25 @@ export default function App() {
         document.execCommand('copy');
         setIsCopied(true);
         setTimeout(() => setIsCopied(false), 2000);
-    } catch (err) {
-        console.error('Copy failed', err);
-    }
+    } catch (err) {}
     document.body.removeChild(textArea);
   };
+
+  // --- EMERGENCY UI (Prevents White Screen) ---
+  if (!firebaseConfig.apiKey && typeof __firebase_config === 'undefined') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-6 text-center">
+        <AlertCircle size={48} className="text-red-500 mb-4" />
+        <h1 className="text-2xl font-black mb-2 uppercase tracking-tighter">Technical Outage</h1>
+        <p className="text-gray-400 text-sm max-w-xs mb-6">
+          The application is missing its production credentials. Ensure Vercel environment variables are set and redeployed.
+        </p>
+        <div className="p-4 bg-gray-800 rounded-xl text-[10px] font-mono text-left w-full max-w-sm">
+          ERR: CFG_MISSING_API_KEY
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col items-center justify-start min-h-screen bg-gray-100 font-sans p-2 sm:p-4 pb-20 sm:pt-4">
@@ -467,7 +494,7 @@ export default function App() {
             </div>
         </div>
         <div className="flex flex-wrap gap-2 justify-center items-center">
-            {(!user || user.isAnonymous) ? (
+            {!user ? (
                 <button onClick={() => setIsAuthModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-md active:scale-95">
                     <LogIn size={14} /> {t.playOnline}
                 </button>
