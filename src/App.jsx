@@ -12,56 +12,63 @@ import {
 } from 'firebase/auth';
 import { getFirestore, doc, onSnapshot, updateDoc, setDoc } from 'firebase/firestore';
 
-// --- SECURE CONFIGURATION LOADER ---
-// This loader handles the transition between local and production without crashing.
+/**
+ * --- SECURE CONFIGURATION LOADER ---
+ * Updated to support individual VITE_ environment variables.
+ * This ensures compatibility with the Vercel variables shown in your screenshot.
+ */
 const getFirebaseConfig = () => {
-  // 1. Production Path (Vercel)
-  if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+  // 1. Check for individual variables first (This matches what you are setting in Vercel)
+  // We use a safe check to avoid the 'import.meta' warning in ES2015
+  const globalEnv = typeof process !== 'undefined' ? process.env : {};
+  
+  // We try to access the Vite meta env safely
+  let viteEnv = {};
+  try {
+    // If this fails during build, the try-catch prevents the crash
+    viteEnv = import.meta.env;
+  } catch (e) {}
+
+  const config = {
+    apiKey: viteEnv?.VITE_FIREBASE_API_KEY || globalEnv?.VITE_FIREBASE_API_KEY || "",
+    authDomain: viteEnv?.VITE_FIREBASE_AUTH_DOMAIN || globalEnv?.VITE_FIREBASE_AUTH_DOMAIN || "atari-go-business.firebaseapp.com",
+    projectId: viteEnv?.VITE_FIREBASE_PROJECT_ID || globalEnv?.VITE_FIREBASE_PROJECT_ID || "atari-go-business",
+    storageBucket: viteEnv?.VITE_FIREBASE_STORAGE_BUCKET || globalEnv?.VITE_FIREBASE_STORAGE_BUCKET || "atari-go-business.firebasestorage.app",
+    messagingSenderId: viteEnv?.VITE_FIREBASE_MESSAGING_SENDER_ID || globalEnv?.VITE_FIREBASE_MESSAGING_SENDER_ID || "591839384619",
+    appId: viteEnv?.VITE_FIREBASE_APP_ID || globalEnv?.VITE_FIREBASE_APP_ID || "1:591839384619:web:bc655a26ebd84d6328466e",
+    measurementId: viteEnv?.VITE_FIREBASE_MEASUREMENT_ID || globalEnv?.VITE_FIREBASE_MEASUREMENT_ID || "G-TR6BTT42WN"
+  };
+
+  // 2. Production Fallback: Check for the single JSON string
+  if (!config.apiKey && typeof __firebase_config !== 'undefined' && __firebase_config) {
     try {
-      // Ensure we handle both string and object forms safely
       return typeof __firebase_config === 'string' ? JSON.parse(__firebase_config) : __firebase_config;
     } catch (e) {
-      console.error("Config Error: Ensure your Vercel __firebase_config is valid JSON.", e);
+      console.error("Config Error: __firebase_config parse failed.", e);
     }
   }
 
-  // 2. Local Fallback (Vite)
-  // We use a safe check to avoid "import.meta" build warnings.
-  let localKey = "";
-  try {
-    // This is wrapped to prevent ES2015 target environment crashes
-    const meta = JSON.parse(JSON.stringify(import.meta));
-    if (meta && meta.env) localKey = meta.env.VITE_FIREBASE_API_KEY;
-  } catch (e) {}
-
-  return {
-    apiKey: localKey || "",
-    authDomain: "atari-go-business.firebaseapp.com",
-    projectId: "atari-go-business",
-    storageBucket: "atari-go-business.firebasestorage.app",
-    messagingSenderId: "591839384619",
-    appId: "1:591839384619:web:bc655a26ebd84d6328466e",
-    measurementId: "G-TR6BTT42WN"
-  };
+  return config;
 };
 
 // --- GLOBAL SERVICES INIT ---
-let app, auth, db;
 const firebaseConfig = getFirebaseConfig();
+let app, auth, db;
 
-try {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-} catch (error) {
-  console.error("Firebase Init Failed:", error);
+if (firebaseConfig.apiKey) {
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (error) {
+    console.error("Firebase Init Failed:", error);
+  }
 }
 
 const appId = 'atari-go-production-v1';
 const SIZE = 9;
 const KOMI = 6.5;
 
-// --- TRANSLATIONS ---
 const i18n = {
   en: {
     title: "Atari GO (9x9)",
@@ -443,7 +450,6 @@ export default function App() {
 
   const copyRoomLink = () => {
     const link = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
-    // Fallback for clipboard in iframe
     const textArea = document.createElement("textarea");
     textArea.value = link;
     document.body.appendChild(textArea);
@@ -457,7 +463,7 @@ export default function App() {
   };
 
   // --- EMERGENCY UI (Prevents White Screen) ---
-  if (!firebaseConfig.apiKey && typeof __firebase_config === 'undefined') {
+  if (!firebaseConfig.apiKey) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-6 text-center">
         <AlertCircle size={48} className="text-red-500 mb-4" />
@@ -465,7 +471,7 @@ export default function App() {
         <p className="text-gray-400 text-sm max-w-xs mb-6">
           The application is missing its production credentials. Ensure Vercel environment variables are set and redeployed.
         </p>
-        <div className="p-4 bg-gray-800 rounded-xl text-[10px] font-mono text-left w-full max-w-sm">
+        <div className="p-4 bg-gray-800 rounded-xl text-[10px] font-mono text-left w-full max-w-sm overflow-x-auto">
           ERR: CFG_MISSING_API_KEY
         </div>
       </div>
