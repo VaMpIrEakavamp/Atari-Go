@@ -992,7 +992,7 @@ export default function App() {
                                 <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in fade-in zoom-in duration-200 
                                   ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'} 
                                   ${isWinningMove ? 'ring-4 ring-green-500 shadow-[0_0_15px_rgba(34,197,94,1)] scale-110 z-30' : 
-                                    isLastMove ? 'ring-2 ring-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)] animate-pulse z-20' : ''}`}>
+                                    isLastMove ? 'ring-2 ring-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.8)] z-20' : ''}`}>
                                 </div>
                               )}
 
