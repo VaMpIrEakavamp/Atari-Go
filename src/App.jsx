@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { 
   Instagram, RotateCcw, ChevronRight, Undo2, Trophy, 
   Swords, Zap, Layout, Globe, Copy, User, CheckCircle2, 
@@ -10,7 +10,7 @@ import {
   createUserWithEmailAndPassword, signOut, updateProfile,
   signInAnonymously, signInWithCustomToken
 } from 'firebase/auth';
-import { getFirestore, doc, onSnapshot, updateDoc, setDoc, getDoc, collection, increment } from 'firebase/firestore';
+import { getFirestore, doc, onSnapshot, updateDoc, setDoc, getDoc, collection, increment, deleteDoc } from 'firebase/firestore';
 
 /**
  * --- SECURE CONFIGURATION LOADER ---
@@ -65,6 +65,54 @@ const getPlayerName = (u) => {
   return `Guest_${u.uid.substring(0, 4)}`;
 };
 
+// --- NATIVE SOUND ENGINE ---
+// Generates professional sound effects without needing external MP3 files
+const playSound = (type) => {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    if (type === 'place') {
+      // Deep wooden "thock"
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(300, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.1);
+    } else if (type === 'capture') {
+      // Bright "pop/ding"
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(400, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.5, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.15);
+    } else if (type === 'win') {
+      // Happy victory chord
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(400, ctx.currentTime);
+      osc.frequency.setValueAtTime(500, ctx.currentTime + 0.1);
+      osc.frequency.setValueAtTime(600, ctx.currentTime + 0.2);
+      osc.frequency.setValueAtTime(800, ctx.currentTime + 0.3);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.6);
+    }
+  } catch (e) {
+    console.error("Audio error:", e); // Fails silently if browser blocks auto-play
+  }
+};
+
 const i18n = {
   en: {
     title: "Atari GO (9x9)", black: "Black", white: "White", territory: "Territory", caps: "Captures",
@@ -82,7 +130,9 @@ const i18n = {
     hasAccount: "Already a master? Login", authError: "Authentication Failed. Please check your credentials.",
     waiting: "Waiting...", gameOverTitle: "Match Finished!", rematch: "Play Again", exitOnline: "Exit Mode",
     leaderboard: "Leaderboard", rank: "Rank", wins: "Wins", total: "Total", classic: "Classic", kill: "Kill",
-    mustLoginToJoin: "Please log in or register to join the match!"
+    mustLoginToJoin: "Please log in or register to join the match!",
+    idleTitle: "Are you still playing?", idleBody: "The room will automatically close in 1 minute if there is no response.",
+    yes: "Yes", no: "No"
   },
   pt: {
     title: "Atari GO (9x9)", black: "Preto", white: "Branco", territory: "Território", caps: "Capturas",
@@ -100,7 +150,9 @@ const i18n = {
     hasAccount: "Já é um mestre? Login", authError: "Falha na autenticação.",
     waiting: "Aguardando...", gameOverTitle: "Fim de Jogo!", rematch: "Jogar Novamente", exitOnline: "Sair do Modo",
     leaderboard: "Placar", rank: "Posição", wins: "Vitórias", total: "Total", classic: "Clássico", kill: "Kill",
-    mustLoginToJoin: "Faça login ou registre-se para entrar na partida!"
+    mustLoginToJoin: "Faça login ou registre-se para entrar na partida!",
+    idleTitle: "Ainda está jogando?", idleBody: "A sala será fechada em 1 minuto se não houver resposta.",
+    yes: "Sim", no: "Não"
   }
 };
 
@@ -175,9 +227,10 @@ export default function App() {
   const [playerRole, setPlayerRole] = useState(null); 
   const [isCopied, setIsCopied] = useState(false);
   
-  // --- WIN/LOSS HIGHLIGHT STATES ---
+  // --- VISUAL HIGHLIGHT STATES ---
   const [winningMove, setWinningMove] = useState(null);
   const [capturedStones, setCapturedStones] = useState([]);
+  const [lastMove, setLastMove] = useState(null); // Tracks the subtle glow
 
   const [playerNames, setPlayerNames] = useState({ 1: '', 2: '' });
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
@@ -186,6 +239,14 @@ export default function App() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [leaderboardData, setLeaderboardData] = useState([]);
   const [leaderboardSort, setLeaderboardSort] = useState('total');
+
+  // --- IDLE SYSTEM STATE ---
+  const [isAloneInRoom, setIsAloneInRoom] = useState(false);
+  const [showIdlePrompt, setShowIdlePrompt] = useState(false);
+  const [idleResetCounter, setIdleResetCounter] = useState(0);
+  const idleTimerRef = useRef(null);
+  const promptTimerRef = useRef(null);
+  const isInitialLoad = useRef(true);
 
   const t = i18n[lang];
 
@@ -264,6 +325,7 @@ export default function App() {
             
             setRoomId(urlRoomId);
             setPlayerRole(role);
+            isInitialLoad.current = true; // Reset sound blocker for new room
           }
         } catch (error) {
           console.error("Join Room Error:", error);
@@ -274,7 +336,55 @@ export default function App() {
     }
   }, [user, roomId, db, t.mustLoginToJoin]);
 
-  // --- FIRESTORE SYNC & NAME UPDATES ---
+  // --- SAFE LOCAL RESET HELPER ---
+  const resetToLocal = useCallback((customMessage = '') => {
+    setRoomId(null);
+    setPlayerRole(null);
+    window.history.replaceState({}, '', window.location.pathname);
+    
+    setBoard(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
+    setCurrentPlayer(1);
+    setCaptures({ 1: 0, 2: 0 });
+    setHistory([]);
+    setPassCount(0);
+    setIsGameOver(false);
+    setWinningMove(null);
+    setCapturedStones([]);
+    setLastMove(null);
+    setMessage(typeof customMessage === 'string' ? customMessage : '');
+  }, []);
+
+  // --- CLEAN EXIT ONLINE & DATABASE CLEANUP ---
+  const handleExitOnline = useCallback(async (msg = '') => {
+    if (roomId && user && db && playerRole) {
+      try {
+        const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
+        const snap = await getDoc(roomRef);
+        
+        if (snap.exists()) {
+          const data = snap.data();
+          const isPlayer1 = playerRole === 1;
+          const otherPlayerId = isPlayer1 ? data.player2Id : data.player1Id;
+
+          if (!otherPlayerId) {
+            await deleteDoc(roomRef);
+          } else {
+            await updateDoc(roomRef, {
+              [isPlayer1 ? 'player1Id' : 'player2Id']: null,
+              [isPlayer1 ? 'player1Name' : 'player2Name']: null,
+              message: `${getPlayerName(user)} left the match.`
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Error cleaning up room:", e);
+      }
+    }
+    
+    resetToLocal(typeof msg === 'string' ? msg : '');
+  }, [roomId, user, db, playerRole, resetToLocal]);
+
+  // --- FIRESTORE SYNC & SOUND PLAYBACK ---
   useEffect(() => {
     if (!user || !roomId || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
@@ -288,24 +398,76 @@ export default function App() {
           2: data.player2Name || t.waiting
         });
 
+        const alone = (data.player1Id === user.uid && !data.player2Id) || (data.player2Id === user.uid && !data.player1Id);
+        setIsAloneInRoom(alone);
+
         if (data.lastMoveBy !== user.uid) {
+          
+          // Network Sound Feedback Logic
+          if (isInitialLoad.current) {
+            isInitialLoad.current = false; // Block sound on initial game load
+          } else {
+            // Determine which sound to play based on the opponent's move
+            if (data.isGameOver && !isGameOver) {
+              playSound('win');
+            } else if (data.capturedStones && JSON.parse(data.capturedStones).length > 0) {
+              playSound('capture');
+            } else if (data.lastMove) {
+              playSound('place');
+            }
+          }
+
           setBoard(JSON.parse(data.board));
           setCurrentPlayer(data.currentPlayer);
           setCaptures(data.captures);
           setIsGameOver(data.isGameOver);
           setGameMode(data.gameMode);
           setPassCount(data.passCount);
+          setLastMove(data.lastMove ? JSON.parse(data.lastMove) : null);
           setWinningMove(data.winningMove ? JSON.parse(data.winningMove) : null);
           setCapturedStones(data.capturedStones ? JSON.parse(data.capturedStones) : []);
+          
           if (data.message) showFlashMessage(data.message);
         }
+      } else {
+        resetToLocal("The room was closed.");
       }
     }, (error) => {
       console.error("Sync error:", error);
       setDbError("Lost connection to the room. Database read permission denied.");
     });
     return () => unsubscribe();
-  }, [user, roomId, showFlashMessage, t.waiting]);
+  }, [user, roomId, showFlashMessage, t.waiting, resetToLocal, isGameOver]);
+
+  // --- IDLE TIMER SYSTEM ---
+  useEffect(() => {
+    const idleTimeoutMs = 5 * 60 * 1000; 
+    const promptTimeoutMs = 60 * 1000;   
+
+    if (isAloneInRoom && roomId) {
+      idleTimerRef.current = setTimeout(() => {
+        setShowIdlePrompt(true);
+        promptTimerRef.current = setTimeout(() => {
+          setShowIdlePrompt(false);
+          handleExitOnline("Room closed due to inactivity.");
+        }, promptTimeoutMs);
+      }, idleTimeoutMs);
+    } else {
+      clearTimeout(idleTimerRef.current);
+      clearTimeout(promptTimerRef.current);
+      setShowIdlePrompt(false);
+    }
+
+    return () => {
+      clearTimeout(idleTimerRef.current);
+      clearTimeout(promptTimerRef.current);
+    };
+  }, [isAloneInRoom, roomId, handleExitOnline, idleResetCounter]);
+
+  const handleStillPlaying = () => {
+    setShowIdlePrompt(false);
+    setIdleResetCounter(c => c + 1); 
+  };
 
   // --- LEADERBOARD SYNC ---
   useEffect(() => {
@@ -356,7 +518,7 @@ export default function App() {
     }
   }, [user, db]);
 
-  const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "", winMove = null, capStones = []) => {
+  const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "", winMove = null, capStones = [], mvObj = null) => {
     if (!roomId || !user || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
     try {
@@ -371,6 +533,7 @@ export default function App() {
         message: customMessage,
         winningMove: winMove ? JSON.stringify(winMove) : null,
         capturedStones: capStones.length ? JSON.stringify(capStones) : null,
+        lastMove: mvObj ? JSON.stringify(mvObj) : null,
         updatedAt: Date.now()
       });
     } catch (e) {
@@ -468,10 +631,12 @@ export default function App() {
       return;
     }
     
+    // Valid move execution
     setHistory(prev => [...prev, { board: board.map(row => [...row]), currentPlayer, captures: { ...captures }, lastBoardState }]);
     setLastBoardState(JSON.stringify(board));
     const newBoard = testBoard;
     const newCaptures = { ...captures, [currentPlayer]: captures[currentPlayer] + captured.length };
+    const currentMoveObj = { r, c };
     
     let gameOver = isGameOver;
     let winMsg = "";
@@ -486,10 +651,15 @@ export default function App() {
       const winnerName = playerNames[currentPlayer] || (currentPlayer === 1 ? t.black : t.white);
       winMsg = t.killWin.replace('{winner}', winnerName);
       showFlashMessage(winMsg);
+      playSound('win');
 
       if (roomId && playerRole === currentPlayer) {
         updateLeaderboard('kill');
       }
+    } else if (captured.length > 0) {
+      playSound('capture');
+    } else {
+      playSound('place');
     }
     
     setBoard(newBoard);
@@ -497,10 +667,11 @@ export default function App() {
     setIsGameOver(gameOver);
     setWinningMove(finalWinningMove);
     setCapturedStones(finalCapturedStones);
+    setLastMove(currentMoveObj);
     setPassCount(0);
     setCurrentPlayer(opponent);
     
-    if (roomId) syncToCloud(newBoard, opponent, newCaptures, gameOver, 0, winMsg, finalWinningMove, finalCapturedStones);
+    if (roomId) syncToCloud(newBoard, opponent, newCaptures, gameOver, 0, winMsg, finalWinningMove, finalCapturedStones, currentMoveObj);
   }, [board, isGameOver, playerRole, currentPlayer, findCaptures, findGroupAndLiberties, lastBoardState, captures, gameMode, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
   const handlePass = useCallback(() => {
@@ -518,6 +689,7 @@ export default function App() {
       const winnerRole = b > w ? 1 : 2;
       const winner = b > w ? (playerNames[1] || t.black) : (playerNames[2] || t.white);
       passMsg = t.gameOver.replace('{winner}', winner).replace('{b}', b.toFixed(1)).replace('{w}', w.toFixed(1));
+      playSound('win');
 
       if (roomId && playerRole === winnerRole) {
         updateLeaderboard('classic');
@@ -526,13 +698,15 @@ export default function App() {
     } else {
       const pName = playerNames[currentPlayer] || (currentPlayer === 1 ? t.black : t.white);
       passMsg = t.passedMsg.replace('{player}', pName);
+      playSound('place');
     }
     
     showFlashMessage(passMsg);
     setPassCount(nextPass);
     setIsGameOver(gameOver);
     setCurrentPlayer(nextPlayer);
-    if (roomId) syncToCloud(board, nextPlayer, captures, gameOver, nextPass, passMsg, null, []);
+    setLastMove(null); // Clear highlight on pass
+    if (roomId) syncToCloud(board, nextPlayer, captures, gameOver, nextPass, passMsg, null, [], null);
   }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
   const resetGame = useCallback(() => {
@@ -547,28 +721,13 @@ export default function App() {
     setIsGameOver(false);
     setWinningMove(null);
     setCapturedStones([]);
+    setLastMove(null);
     setShowResetModal(false);
     showFlashMessage(t.resetNotify);
     setTimeout(() => setMessage(''), 3000);
     
-    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "", null, []);
+    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "", null, [], null);
   }, [roomId, playerRole, t, showFlashMessage, syncToCloud]);
-
-  const handleExitOnline = useCallback(() => {
-    setRoomId(null);
-    setPlayerRole(null);
-    window.history.replaceState({}, '', window.location.pathname);
-    
-    setBoard(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
-    setCurrentPlayer(1);
-    setCaptures({ 1: 0, 2: 0 });
-    setHistory([]);
-    setPassCount(0);
-    setIsGameOver(false);
-    setWinningMove(null);
-    setCapturedStones([]);
-    setMessage('');
-  }, []);
 
   const undoMove = useCallback(() => {
     if (history.length === 0 || isGameOver || !!roomId) return; 
@@ -578,6 +737,7 @@ export default function App() {
     setCaptures(last.captures);
     setLastBoardState(last.lastBoardState);
     setHistory(prev => prev.slice(0, -1));
+    setLastMove(null); // Clear highlight on undo
     showFlashMessage(t.undoNotify);
     setTimeout(() => setMessage(''), 3000);
   }, [history, isGameOver, roomId, t, showFlashMessage]);
@@ -639,9 +799,11 @@ export default function App() {
         player1Name: hostIsBlack ? name : null,
         player2Name: !hostIsBlack ? name : null,
         winningMove: null,
-        capturedStones: null
+        capturedStones: null,
+        lastMove: null
       });
       
+      isInitialLoad.current = true;
       setRoomId(newRoomId);
       setPlayerRole(assignedRole); 
       resetGame();
@@ -813,6 +975,7 @@ export default function App() {
                     {board.map((row, r) => row.map((cell, c) => {
                         const isWinningMove = winningMove && winningMove.r === r && winningMove.c === c;
                         const isCaptured = capturedStones.some(stone => stone.r === r && stone.c === c);
+                        const isLastMove = lastMove && lastMove.r === r && lastMove.c === c;
 
                         return (
                           <div key={`${r}-${c}`} onClick={() => handleMove(r, c)} className={`absolute flex items-center justify-center ${isGameOver ? 'cursor-default' : 'cursor-pointer'}`}
@@ -826,7 +989,11 @@ export default function App() {
                               
                               {/* Actual Stones */}
                               {cell !== 0 && (
-                                <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in fade-in zoom-in duration-200 ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'} ${isWinningMove ? 'ring-4 ring-green-500 shadow-[0_0_15px_rgba(34,197,94,1)] scale-110 z-30' : ''}`}></div>
+                                <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in fade-in zoom-in duration-200 
+                                  ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'} 
+                                  ${isWinningMove ? 'ring-4 ring-green-500 shadow-[0_0_15px_rgba(34,197,94,1)] scale-110 z-30' : 
+                                    isLastMove ? 'ring-2 ring-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)] animate-pulse z-20' : ''}`}>
+                                </div>
                               )}
 
                               {/* Target Marker for KILLED Stones */}
@@ -885,6 +1052,20 @@ export default function App() {
             <span className="text-[11px] font-black tracking-wide">@0g_2k6</span>
           </a>
       </div>
+
+      {/* --- IDLE PROMPT MODAL --- */}
+      {showIdlePrompt && (
+        <div className="fixed inset-0 z-[700] flex items-center justify-center bg-black/60 backdrop-blur-[2px] p-4 text-center">
+            <div className="bg-white rounded-2xl shadow-2xl p-5 max-w-[280px] w-full animate-in zoom-in slide-in-from-bottom-2 duration-200">
+                <h3 className="text-base font-black mb-1 text-gray-900">{t.idleTitle}</h3>
+                <p className="text-gray-500 text-[10px] mb-6 leading-relaxed">{t.idleBody}</p>
+                <div className="flex gap-3">
+                    <button onClick={() => { setShowIdlePrompt(false); handleExitOnline("Room closed due to inactivity."); }} className="flex-1 py-2 text-[10px] text-gray-500 font-bold hover:bg-gray-50 bg-gray-100 rounded-lg">{t.no}</button>
+                    <button onClick={handleStillPlaying} className="flex-1 py-2 bg-indigo-600 text-white text-[10px] font-black rounded-lg shadow-lg active:scale-95 transition-all">{t.yes}</button>
+                </div>
+            </div>
+        </div>
+      )}
 
       {/* --- LEADERBOARD MODAL --- */}
       {showLeaderboard && (
