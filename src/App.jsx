@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { 
   Instagram, RotateCcw, ChevronRight, Undo2, Trophy, 
   Swords, Zap, Layout, Globe, Copy, User, CheckCircle2, 
-  LogIn, LogOut, Mail, Lock, ShieldCheck, AlertCircle, XCircle, Award
+  LogIn, LogOut, Mail, Lock, ShieldCheck, AlertCircle, XCircle, Award, Eye
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -66,7 +66,6 @@ const getPlayerName = (u) => {
 };
 
 // --- NATIVE SOUND ENGINE ---
-// Generates professional sound effects without needing external MP3 files
 const playSound = (type) => {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -79,7 +78,6 @@ const playSound = (type) => {
     gain.connect(ctx.destination);
 
     if (type === 'place') {
-      // Deep wooden "thock"
       osc.type = 'sine';
       osc.frequency.setValueAtTime(300, ctx.currentTime);
       osc.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 0.1);
@@ -88,7 +86,6 @@ const playSound = (type) => {
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + 0.1);
     } else if (type === 'capture') {
-      // Bright "pop/ding"
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(400, ctx.currentTime);
       osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.15);
@@ -97,7 +94,6 @@ const playSound = (type) => {
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + 0.15);
     } else if (type === 'win') {
-      // Happy victory chord
       osc.type = 'square';
       osc.frequency.setValueAtTime(400, ctx.currentTime);
       osc.frequency.setValueAtTime(500, ctx.currentTime + 0.1);
@@ -109,7 +105,7 @@ const playSound = (type) => {
       osc.stop(ctx.currentTime + 0.6);
     }
   } catch (e) {
-    console.error("Audio error:", e); // Fails silently if browser blocks auto-play
+    console.error("Audio error:", e); 
   }
 };
 
@@ -132,7 +128,10 @@ const i18n = {
     leaderboard: "Leaderboard", rank: "Rank", wins: "Wins", total: "Total", classic: "Classic", kill: "Kill",
     mustLoginToJoin: "Please log in or register to join the match!",
     idleTitle: "Are you still playing?", idleBody: "The room will automatically close in 1 minute if there is no response.",
-    yes: "Yes", no: "No"
+    yes: "Yes", no: "No",
+    tourneyTitle: "Ongoing Event 🏆", tourneyBody: "Reach #1 in Kill Mode to win. Check our page for rules!",
+    upcomingEvents: "See upcoming events",
+    hostSpectator: "Host as Spectator", spectating: "Spectating", spectator: "Spectator"
   },
   pt: {
     title: "Atari GO (9x9)", black: "Preto", white: "Branco", territory: "Território", caps: "Capturas",
@@ -152,7 +151,10 @@ const i18n = {
     leaderboard: "Placar", rank: "Posição", wins: "Vitórias", total: "Total", classic: "Clássico", kill: "Kill",
     mustLoginToJoin: "Faça login ou registre-se para entrar na partida!",
     idleTitle: "Ainda está jogando?", idleBody: "A sala será fechada em 1 minuto se não houver resposta.",
-    yes: "Sim", no: "Não"
+    yes: "Sim", no: "Não",
+    tourneyTitle: "Evento em Andamento 🏆", tourneyBody: "Seja o #1 no Modo Kill. Veja as regras na página!",
+    upcomingEvents: "Ver próximos eventos",
+    hostSpectator: "Criar como Espectador", spectating: "Assistindo", spectator: "Espectador"
   }
 };
 
@@ -230,7 +232,7 @@ export default function App() {
   // --- VISUAL HIGHLIGHT STATES ---
   const [winningMove, setWinningMove] = useState(null);
   const [capturedStones, setCapturedStones] = useState([]);
-  const [lastMove, setLastMove] = useState(null); // Tracks the subtle glow
+  const [lastMove, setLastMove] = useState(null); 
 
   const [playerNames, setPlayerNames] = useState({ 1: '', 2: '' });
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
@@ -238,7 +240,7 @@ export default function App() {
   // --- LEADERBOARD STATE ---
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [leaderboardData, setLeaderboardData] = useState([]);
-  const [leaderboardSort, setLeaderboardSort] = useState('total');
+  const [leaderboardSort, setLeaderboardSort] = useState('kill'); // Default to Kill for the tournament
 
   // --- IDLE SYSTEM STATE ---
   const [isAloneInRoom, setIsAloneInRoom] = useState(false);
@@ -321,11 +323,14 @@ export default function App() {
             } else if (!data.player2Id) {
               role = 2;
               await updateDoc(roomRef, { player2Id: user.uid, player2Name: name });
+            } else {
+              // Room is full, join as a Spectator automatically
+              role = 'spectator';
             }
             
             setRoomId(urlRoomId);
             setPlayerRole(role);
-            isInitialLoad.current = true; // Reset sound blocker for new room
+            isInitialLoad.current = true;
           }
         } catch (error) {
           console.error("Join Room Error:", error);
@@ -398,16 +403,14 @@ export default function App() {
           2: data.player2Name || t.waiting
         });
 
-        const alone = (data.player1Id === user.uid && !data.player2Id) || (data.player2Id === user.uid && !data.player1Id);
-        setIsAloneInRoom(alone);
+        const activePlayersCount = (data.player1Id ? 1 : 0) + (data.player2Id ? 1 : 0);
+        setIsAloneInRoom(activePlayersCount < 2);
 
         if (data.lastMoveBy !== user.uid) {
           
-          // Network Sound Feedback Logic
           if (isInitialLoad.current) {
-            isInitialLoad.current = false; // Block sound on initial game load
+            isInitialLoad.current = false; 
           } else {
-            // Determine which sound to play based on the opponent's move
             if (data.isGameOver && !isGameOver) {
               playSound('win');
             } else if (data.capturedStones && JSON.parse(data.capturedStones).length > 0) {
@@ -705,7 +708,7 @@ export default function App() {
     setPassCount(nextPass);
     setIsGameOver(gameOver);
     setCurrentPlayer(nextPlayer);
-    setLastMove(null); // Clear highlight on pass
+    setLastMove(null); 
     if (roomId) syncToCloud(board, nextPlayer, captures, gameOver, nextPass, passMsg, null, [], null);
   }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
@@ -737,7 +740,7 @@ export default function App() {
     setCaptures(last.captures);
     setLastBoardState(last.lastBoardState);
     setHistory(prev => prev.slice(0, -1));
-    setLastMove(null); // Clear highlight on undo
+    setLastMove(null); 
     showFlashMessage(t.undoNotify);
     setTimeout(() => setMessage(''), 3000);
   }, [history, isGameOver, roomId, t, showFlashMessage]);
@@ -819,6 +822,49 @@ export default function App() {
     }
   };
 
+  // --- NEW: HOST TOURNAMENT AS SPECTATOR ---
+  const startSpectatorRoom = async () => {
+    setDbError(''); 
+    if (!user) { setIsAuthModalOpen(true); return; }
+    if (!db) { setDbError("Database is not connected."); return; }
+    
+    setIsCreatingRoom(true);
+    try {
+      const newRoomId = Math.random().toString(36).substring(2, 9);
+      const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
+      
+      // Leave BOTH player slots empty so the competitors can join via the link
+      await setDoc(roomRef, {
+        board: JSON.stringify(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0))),
+        currentPlayer: 1, 
+        captures: { 1: 0, 2: 0 }, 
+        isGameOver: false,
+        gameMode, 
+        passCount: 0, 
+        lastMoveBy: user.uid, 
+        createdAt: Date.now(),
+        player1Id: null, 
+        player2Id: null,
+        player1Name: null,
+        player2Name: null,
+        hostId: user.uid,
+        winningMove: null,
+        capturedStones: null,
+        lastMove: null
+      });
+      
+      isInitialLoad.current = true;
+      setRoomId(newRoomId);
+      setPlayerRole('spectator'); 
+      resetGame();
+    } catch (error) {
+      console.error("Spectator Room creation failed:", error);
+      setDbError("Unable to create spectator room.");
+    } finally {
+      setIsCreatingRoom(false);
+    }
+  };
+
   const copyRoomLink = async () => {
     const link = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
     try {
@@ -856,6 +902,23 @@ export default function App() {
       {isGameOver && <Confetti />}
 
       <div className="w-full max-w-xl flex flex-col gap-3 mb-4 px-2 relative z-10">
+        
+        {/* --- ONGOING EVENT BANNER --- */}
+        <div className="w-full bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 rounded-xl p-3 flex flex-col gap-2 shadow-md">
+          <div className="flex items-center gap-3">
+            <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">
+              <Trophy size={18} className="text-white" />
+            </div>
+            <div className="flex flex-col text-left">
+              <span className="text-white text-xs font-black uppercase tracking-wider">{t.tourneyTitle}</span>
+              <span className="text-white/90 text-[10px] font-bold">{t.tourneyBody}</span>
+            </div>
+          </div>
+          <a href="https://www.instagram.com/atari_go9?utm_source=ig_web_button_share_sheet&igsh=ZDNlZDc0MzIxNw==" target="_blank" rel="noopener noreferrer" className="w-full bg-white hover:bg-gray-50 text-purple-700 text-[10px] font-black uppercase tracking-wide py-2 rounded-lg flex justify-center items-center shadow-sm transition-all active:scale-95 group mt-1">
+            <Instagram size={14} className="mr-1.5 group-hover:scale-110 transition-transform" /> {t.upcomingEvents}
+          </a>
+        </div>
+
         <div className="flex justify-between items-center">
             <div className="flex bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
                 {['classic', 'kill'].map(m => (
@@ -892,9 +955,14 @@ export default function App() {
         <div className="flex flex-col sm:flex-row gap-2 w-full justify-between items-center bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
           <div className="flex items-center gap-2">
             {!roomId ? (
-              <button onClick={startOnlineRoom} disabled={isCreatingRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all disabled:opacity-50">
-                <Globe size={14} className={isCreatingRoom ? "animate-spin" : ""} /> {isCreatingRoom ? "Connecting..." : t.playOnline}
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button onClick={startOnlineRoom} disabled={isCreatingRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all disabled:opacity-50">
+                  <Globe size={14} className={isCreatingRoom ? "animate-spin" : ""} /> {isCreatingRoom ? "..." : t.playOnline}
+                </button>
+                <button onClick={startSpectatorRoom} disabled={isCreatingRoom} title={t.hostSpectator} className="flex items-center justify-center p-2 bg-purple-600 text-white rounded-lg shadow-md hover:bg-purple-700 active:scale-95 transition-all disabled:opacity-50">
+                  <Eye size={14} />
+                </button>
+              </div>
             ) : (
               <div className="flex items-center gap-2">
                 <button onClick={copyRoomLink} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all">
@@ -930,9 +998,12 @@ export default function App() {
         {roomId && user && (
             <div className="mb-4 flex items-center gap-2 px-3 py-1 bg-indigo-50 border border-indigo-100 rounded-full text-[10px] text-indigo-700 font-bold">
                 <User size={10} />
-                <span>{getPlayerName(user)} ({playerRole === 1 ? t.black : t.white})</span>
+                <span>{getPlayerName(user)} ({playerRole === 1 ? t.black : playerRole === 2 ? t.white : t.spectator})</span>
                 <span className="opacity-30">|</span>
-                <span className="flex items-center gap-1 font-black"><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> ONLINE</span>
+                <span className="flex items-center gap-1 font-black">
+                    {playerRole === 'spectator' ? <Eye size={10} className="text-purple-500 animate-pulse" /> : <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>}
+                    {playerRole === 'spectator' ? t.spectating.toUpperCase() : 'ONLINE'}
+                </span>
             </div>
         )}
         
@@ -1023,10 +1094,20 @@ export default function App() {
                  <button onClick={handleExitOnline} className="px-3 py-2 bg-gray-100 border border-gray-200 text-gray-600 text-[10px] font-bold rounded-lg hover:bg-gray-200 active:scale-95 transition-all">
                    {t.exitOnline}
                  </button>
-                 <button onClick={resetGame} disabled={roomId && !playerRole} className="px-3 py-2 bg-green-500 text-white text-[10px] font-black uppercase rounded-lg shadow-md hover:bg-green-600 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none">
+                 {/* Only allow players or the host to restart */}
+                 <button onClick={resetGame} disabled={!roomId || (!playerRole && playerRole !== 'spectator')} className="px-3 py-2 bg-green-500 text-white text-[10px] font-black uppercase rounded-lg shadow-md hover:bg-green-600 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none">
                    {t.rematch}
                  </button>
                </div>
+             </div>
+          ) : playerRole === 'spectator' ? (
+             <div className="flex gap-2 w-full max-w-sm h-full">
+                <div className="flex-1 flex items-center justify-center bg-purple-50 border border-purple-100 rounded-xl text-purple-600 font-bold text-[10px] uppercase tracking-widest gap-2 shadow-sm">
+                    <Eye size={16} /> {t.spectating}
+                </div>
+                <button onClick={() => setShowResetModal(true)} disabled={!roomId} className="w-16 flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm">
+                    <RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span>
+                </button>
              </div>
           ) : (
             <div className="grid grid-cols-3 gap-2 w-full max-w-sm h-full">
