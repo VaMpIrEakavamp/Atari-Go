@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { 
   Instagram, RotateCcw, ChevronRight, Undo2, Trophy, 
   Swords, Zap, Layout, Globe, Copy, User, CheckCircle2, 
-  LogIn, LogOut, Mail, Lock, ShieldCheck, AlertCircle, XCircle, Award, Eye
+  LogIn, LogOut, Mail, Lock, ShieldCheck, AlertCircle, XCircle, Award, Eye, Bot
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -131,7 +131,8 @@ const i18n = {
     yes: "Yes", no: "No",
     tourneyTitle: "Ongoing Event 🏆", tourneyBody: "Reach #1 in Kill Mode to win. Check our page for rules!",
     upcomingEvents: "See upcoming events",
-    hostSpectator: "Host as Spectator", spectating: "Spectating", spectator: "Spectator"
+    hostSpectator: "Host as Spectator", spectating: "Spectating", spectator: "Spectator",
+    playAI: "Play vs AI", playLocal: "Pass & Play", botName: "AI Bot 🤖", botThinking: "Thinking..."
   },
   pt: {
     title: "Atari GO (9x9)", black: "Preto", white: "Branco", territory: "Território", caps: "Capturas",
@@ -154,7 +155,8 @@ const i18n = {
     yes: "Sim", no: "Não",
     tourneyTitle: "Evento em Andamento 🏆", tourneyBody: "Seja o #1 no Modo Kill. Veja as regras na página!",
     upcomingEvents: "Ver próximos eventos",
-    hostSpectator: "Criar como Espectador", spectating: "Assistindo", spectator: "Espectador"
+    hostSpectator: "Criar como Espectador", spectating: "Assistindo", spectator: "Espectador",
+    playAI: "Jogar contra IA", playLocal: "Passar e Jogar", botName: "IA Bot 🤖", botThinking: "Pensando..."
   }
 };
 
@@ -233,6 +235,10 @@ export default function App() {
   const [winningMove, setWinningMove] = useState(null);
   const [capturedStones, setCapturedStones] = useState([]);
   const [lastMove, setLastMove] = useState(null); 
+
+  // --- NEW AI STATES ---
+  const [isVsAI, setIsVsAI] = useState(false);
+  const [isBotThinking, setIsBotThinking] = useState(false);
 
   const [playerNames, setPlayerNames] = useState({ 1: '', 2: '' });
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
@@ -345,6 +351,8 @@ export default function App() {
   const resetToLocal = useCallback((customMessage = '') => {
     setRoomId(null);
     setPlayerRole(null);
+    setIsVsAI(false); // Clear AI mode when resetting fully
+    setIsBotThinking(false);
     window.history.replaceState({}, '', window.location.pathname);
     
     setBoard(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
@@ -614,9 +622,12 @@ export default function App() {
     return { blackTerritory, whiteTerritory, emptyCount };
   }, [board]);
 
-  const handleMove = useCallback((r, c) => {
+  const handleMove = useCallback((r, c, isBot = false) => {
     if (board[r][c] !== 0 || isGameOver) return;
-    if (playerRole && currentPlayer !== playerRole) return; 
+    
+    // Block user from moving if it's not their turn, UNLESS it's the bot making an automated move
+    if (!isBot && playerRole && currentPlayer !== playerRole) return; 
+    
     const testBoard = board.map(row => [...row]);
     testBoard[r][c] = currentPlayer;
     const opponent = currentPlayer === 1 ? 2 : 1;
@@ -677,8 +688,8 @@ export default function App() {
     if (roomId) syncToCloud(newBoard, opponent, newCaptures, gameOver, 0, winMsg, finalWinningMove, finalCapturedStones, currentMoveObj);
   }, [board, isGameOver, playerRole, currentPlayer, findCaptures, findGroupAndLiberties, lastBoardState, captures, gameMode, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
-  const handlePass = useCallback(() => {
-    if (isGameOver || (playerRole && currentPlayer !== playerRole)) return;
+  const handlePass = useCallback((isBot = false) => {
+    if (isGameOver || (!isBot && playerRole && currentPlayer !== playerRole)) return;
     setHistory(prev => [...prev, { board: board.map(row => [...row]), currentPlayer, captures: { ...captures }, lastBoardState }]);
     const nextPass = passCount + 1;
     let gameOver = isGameOver;
@@ -713,7 +724,7 @@ export default function App() {
   }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
   const resetGame = useCallback(() => {
-    if (roomId && !playerRole) return; 
+    if (roomId && !playerRole && playerRole !== 'spectator') return; 
     
     const emptyBoard = Array(SIZE).fill(null).map(() => Array(SIZE).fill(0));
     setBoard(emptyBoard);
@@ -725,6 +736,7 @@ export default function App() {
     setWinningMove(null);
     setCapturedStones([]);
     setLastMove(null);
+    setIsBotThinking(false);
     setShowResetModal(false);
     showFlashMessage(t.resetNotify);
     setTimeout(() => setMessage(''), 3000);
@@ -734,16 +746,95 @@ export default function App() {
 
   const undoMove = useCallback(() => {
     if (history.length === 0 || isGameOver || !!roomId) return; 
-    const last = history[history.length - 1];
-    setBoard(last.board);
-    setCurrentPlayer(last.currentPlayer);
-    setCaptures(last.captures);
-    setLastBoardState(last.lastBoardState);
-    setHistory(prev => prev.slice(0, -1));
+    
+    // If playing vs AI, undo needs to pop TWO moves off the stack to get back to User's turn
+    let targetHistoryIndex = history.length - 1;
+    if (isVsAI && history.length >= 2) {
+       targetHistoryIndex = history.length - 2; 
+    }
+
+    const targetState = history[targetHistoryIndex];
+    setBoard(targetState.board);
+    setCurrentPlayer(targetState.currentPlayer);
+    setCaptures(targetState.captures);
+    setLastBoardState(targetState.lastBoardState);
+    setHistory(prev => prev.slice(0, targetHistoryIndex));
     setLastMove(null); 
     showFlashMessage(t.undoNotify);
     setTimeout(() => setMessage(''), 3000);
-  }, [history, isGameOver, roomId, t, showFlashMessage]);
+  }, [history, isGameOver, roomId, t, showFlashMessage, isVsAI]);
+
+  // --- SMART GREEDY AI BOT ENGINE ---
+  const makeBotMove = useCallback(() => {
+    let validMoves = [];
+    let winningMoves = [];
+    let blockingMoves = [];
+
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        if (board[r][c] === 0) {
+          // Simulate bot move
+          const testBoard = board.map(row => [...row]);
+          testBoard[r][c] = 2; // Bot is White (2)
+          const capturedUser = findCaptures(testBoard, 1);
+          capturedUser.forEach(pos => testBoard[pos.r][pos.c] = 0);
+          const { liberties } = findGroupAndLiberties(testBoard, r, c);
+
+          const isSuicide = capturedUser.length === 0 && liberties.length === 0;
+          const isKo = JSON.stringify(testBoard) === lastBoardState;
+
+          if (!isSuicide && !isKo) {
+             validMoves.push({r, c});
+             
+             // Check 1: Will this win the game or capture a stone?
+             if (capturedUser.length > 0) winningMoves.push({r, c});
+
+             // Check 2: Would the user playing here capture one of our stones? (Block them!)
+             const userTestBoard = board.map(row => [...row]);
+             userTestBoard[r][c] = 1;
+             const capturedBot = findCaptures(userTestBoard, 2);
+             if (capturedBot.length > 0) blockingMoves.push({r, c});
+          }
+        }
+      }
+    }
+
+    if (validMoves.length === 0) {
+      handlePass(true);
+      return;
+    }
+
+    // Check 3: Play adjacent to existing stones for structure
+    let adjacentMoves = [];
+    validMoves.forEach(move => {
+      const {r, c} = move;
+      const neighbors = [{r: r-1, c}, {r: r+1, c}, {r, c: c-1}, {r, c: c+1}];
+      const hasNeighbor = neighbors.some(n => n.r >= 0 && n.r < SIZE && n.c >= 0 && n.c < SIZE && board[n.r][n.c] !== 0);
+      if (hasNeighbor) adjacentMoves.push(move);
+    });
+
+    // EXECUTE PRIORITY DECISION
+    let chosenMove = null;
+    if (winningMoves.length > 0) chosenMove = winningMoves[Math.floor(Math.random() * winningMoves.length)];
+    else if (blockingMoves.length > 0) chosenMove = blockingMoves[Math.floor(Math.random() * blockingMoves.length)];
+    else if (adjacentMoves.length > 0) chosenMove = adjacentMoves[Math.floor(Math.random() * adjacentMoves.length)];
+    else chosenMove = validMoves[Math.floor(Math.random() * validMoves.length)];
+
+    handleMove(chosenMove.r, chosenMove.c, true);
+  }, [board, findCaptures, findGroupAndLiberties, lastBoardState, handleMove, handlePass]);
+
+  // AI TURN TRIGGER
+  useEffect(() => {
+    if (isVsAI && currentPlayer === 2 && !isGameOver && !roomId) {
+      setIsBotThinking(true);
+      const timer = setTimeout(() => {
+        makeBotMove();
+        setIsBotThinking(false);
+      }, 700); // 700ms human-like thinking delay
+      return () => clearTimeout(timer);
+    }
+  }, [currentPlayer, isVsAI, isGameOver, roomId, makeBotMove]);
+
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -885,6 +976,13 @@ export default function App() {
     }
   };
 
+  const startVsAI = () => {
+    setRoomId(null);
+    setIsVsAI(true);
+    setPlayerRole(1); // User is always Black against AI
+    resetGame();
+  };
+
   if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-6 text-center">
@@ -953,15 +1051,27 @@ export default function App() {
         )}
 
         <div className="flex flex-col sm:flex-row gap-2 w-full justify-between items-center bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 w-full sm:w-auto">
             {!roomId ? (
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-start w-full">
                 <button onClick={startOnlineRoom} disabled={isCreatingRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all disabled:opacity-50">
                   <Globe size={14} className={isCreatingRoom ? "animate-spin" : ""} /> {isCreatingRoom ? "..." : t.playOnline}
                 </button>
-                <button onClick={startSpectatorRoom} disabled={isCreatingRoom} title={t.hostSpectator} className="flex items-center justify-center p-2 bg-purple-600 text-white rounded-lg shadow-md hover:bg-purple-700 active:scale-95 transition-all disabled:opacity-50">
-                  <Eye size={14} />
+                
+                <button onClick={startSpectatorRoom} disabled={isCreatingRoom} className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 text-white rounded-lg text-xs font-bold shadow-md hover:bg-purple-700 active:scale-95 transition-all disabled:opacity-50">
+                  <Eye size={14} /> {t.spectator}
                 </button>
+                
+                {/* --- NEW BOT TOGGLE BUTTON --- */}
+                {!isVsAI ? (
+                  <button onClick={startVsAI} className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold shadow-md hover:bg-slate-900 active:scale-95 transition-all">
+                    <Bot size={14} /> {t.playAI}
+                  </button>
+                ) : (
+                  <button onClick={() => { setIsVsAI(false); resetToLocal(); }} className="flex items-center gap-1.5 px-3 py-2 bg-gray-200 text-gray-700 rounded-lg text-xs font-bold shadow-sm hover:bg-gray-300 active:scale-95 transition-all">
+                    <User size={14} /> {t.playLocal}
+                  </button>
+                )}
               </div>
             ) : (
               <div className="flex items-center gap-2">
@@ -1011,7 +1121,7 @@ export default function App() {
           <div className="flex flex-col items-start min-w-0">
             <div className="flex items-center gap-1 mb-1">
               <div className={`w-2.5 h-2.5 rounded-full bg-black shadow-sm ${currentPlayer === 1 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
-              <span className="font-bold text-[10px] sm:text-xs truncate">{playerNames[1] || t.black}</span>
+              <span className="font-bold text-[10px] sm:text-xs truncate">{roomId ? playerNames[1] : (isVsAI ? t.black + " (You)" : t.black)}</span>
             </div>
             {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.blackTerritory}</p>}
             <p className="text-[8px] text-gray-500 truncate">{t.caps}: {captures[1]}</p>
@@ -1019,7 +1129,9 @@ export default function App() {
           </div>
           <div className="flex flex-col items-center justify-center border-x border-gray-200 text-center">
             <div className={`text-[8px] font-black uppercase tracking-tighter mb-0.5 truncate w-full ${isGameOver ? 'text-green-600' : 'text-blue-600'}`}>
-              {isGameOver ? 'FINISH' : `${playerNames[currentPlayer] || (currentPlayer === 1 ? t.black : t.white)}${t.turnSuffix}`}
+              {isGameOver ? 'FINISH' : isBotThinking ? (
+                 <span className="flex items-center justify-center gap-1 text-slate-500"><Bot size={10} className="animate-bounce" /> {t.botThinking}</span>
+              ) : `${roomId ? playerNames[currentPlayer] : (isVsAI && currentPlayer === 2 ? t.botName : (currentPlayer === 1 ? t.black : t.white))}${t.turnSuffix}`}
             </div>
             <div className="text-[7px] text-gray-400 font-bold uppercase whitespace-nowrap">
               {gameMode === 'classic' ? `${scoreData.emptyCount} ${t.pointsRemaining}` : "FIRST KILL WINS"}
@@ -1027,7 +1139,7 @@ export default function App() {
           </div>
           <div className="flex flex-col items-end text-right min-w-0">
             <div className="flex items-center gap-1 mb-1">
-              <span className="font-bold text-[10px] sm:text-xs truncate">{playerNames[2] || t.white}</span>
+              <span className="font-bold text-[10px] sm:text-xs truncate">{roomId ? playerNames[2] : (isVsAI ? t.botName : t.white)}</span>
               <div className={`w-2.5 h-2.5 rounded-full bg-white border border-gray-300 shadow-sm ${currentPlayer === 2 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
             </div>
             {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.whiteTerritory}</p>}
@@ -1105,6 +1217,7 @@ export default function App() {
                 <div className="flex-1 flex items-center justify-center bg-purple-50 border border-purple-100 rounded-xl text-purple-600 font-bold text-[10px] uppercase tracking-widest gap-2 shadow-sm">
                     <Eye size={16} /> {t.spectating}
                 </div>
+                {/* Spectator/Host keeps admin power to reset a broken match if necessary */}
                 <button onClick={() => setShowResetModal(true)} disabled={!roomId} className="w-16 flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm">
                     <RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span>
                 </button>
@@ -1113,7 +1226,8 @@ export default function App() {
             <div className="grid grid-cols-3 gap-2 w-full max-w-sm h-full">
                 <button onClick={undoMove} disabled={history.length === 0 || !!roomId} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><Undo2 size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.undoBtn}</span></button>
                 <button onClick={handlePass} disabled={(playerRole && currentPlayer !== playerRole)} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><ChevronRight size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.passBtn}</span></button>
-                <button onClick={() => setShowResetModal(true)} disabled={roomId && !playerRole} className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span></button>
+                {/* DISABLED RESET BUTTON FOR ONLINE PLAYERS */}
+                <button onClick={() => setShowResetModal(true)} disabled={!!roomId} className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span></button>
             </div>
           )}
         </div>
