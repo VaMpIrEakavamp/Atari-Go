@@ -1320,6 +1320,12 @@ export default function App() {
                 type="text" 
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && chatInput.trim()) {
+                    e.preventDefault();
+                    handleSendChat(e);
+                  }
+                }}
                 placeholder="Type a message..." 
                 maxLength={80} // Restrict length to save database space
                 className="flex-1 bg-gray-100 border-none rounded-lg px-3 text-xs focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
