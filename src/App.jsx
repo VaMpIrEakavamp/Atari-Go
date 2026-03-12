@@ -2,7 +2,8 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { 
   Instagram, RotateCcw, ChevronRight, Undo2, Trophy, 
   Swords, Zap, Layout, Globe, Copy, User, CheckCircle2, 
-  LogIn, LogOut, Mail, Lock, ShieldCheck, AlertCircle, XCircle, Award, Eye, Bot
+  LogIn, LogOut, Mail, Lock, ShieldCheck, AlertCircle, XCircle, Award, Eye, Bot,
+  MessageSquare, Send
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -240,6 +241,11 @@ export default function App() {
   const [isVsAI, setIsVsAI] = useState(false);
   const [isBotThinking, setIsBotThinking] = useState(false);
 
+  // --- NEW CHAT STATES ---
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const chatEndRef = useRef(null);
+
   const [playerNames, setPlayerNames] = useState({ 1: '', 2: '' });
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
 
@@ -351,7 +357,7 @@ export default function App() {
   const resetToLocal = useCallback((customMessage = '') => {
     setRoomId(null);
     setPlayerRole(null);
-    setIsVsAI(false); // Clear AI mode when resetting fully
+    setIsVsAI(false); 
     setIsBotThinking(false);
     window.history.replaceState({}, '', window.location.pathname);
     
@@ -364,6 +370,7 @@ export default function App() {
     setWinningMove(null);
     setCapturedStones([]);
     setLastMove(null);
+    setChatMessages([]);
     setMessage(typeof customMessage === 'string' ? customMessage : '');
   }, []);
 
@@ -439,6 +446,9 @@ export default function App() {
           setCapturedStones(data.capturedStones ? JSON.parse(data.capturedStones) : []);
           
           if (data.message) showFlashMessage(data.message);
+          
+          // Sync Chat
+          setChatMessages(data.chatMessages ? JSON.parse(data.chatMessages) : []);
         }
       } else {
         resetToLocal("The room was closed.");
@@ -529,11 +539,11 @@ export default function App() {
     }
   }, [user, db]);
 
-  const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "", winMove = null, capStones = [], mvObj = null) => {
+  const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "", winMove = null, capStones = [], mvObj = null, clearChat = false) => {
     if (!roomId || !user || !db) return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
     try {
-      await updateDoc(roomRef, {
+      const payload = {
         board: JSON.stringify(newBoard),
         currentPlayer: nextPlayer,
         captures: newCaptures,
@@ -546,7 +556,12 @@ export default function App() {
         capturedStones: capStones.length ? JSON.stringify(capStones) : null,
         lastMove: mvObj ? JSON.stringify(mvObj) : null,
         updatedAt: Date.now()
-      });
+      };
+      
+      // Database Saver: Explicitly wipe chat payload if clearChat is triggered
+      if (clearChat) payload.chatMessages = JSON.stringify([]);
+      
+      await updateDoc(roomRef, payload);
     } catch (e) {
       console.error("Cloud sync failed", e);
       setDbError("Move not saved! Database write permission denied.");
@@ -741,7 +756,8 @@ export default function App() {
     showFlashMessage(t.resetNotify);
     setTimeout(() => setMessage(''), 3000);
     
-    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "", null, [], null);
+    // Pass `true` at the end to wipe the chat from the Firebase Database!
+    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "", null, [], null, true);
   }, [roomId, playerRole, t, showFlashMessage, syncToCloud]);
 
   const undoMove = useCallback(() => {
@@ -894,7 +910,8 @@ export default function App() {
         player2Name: !hostIsBlack ? name : null,
         winningMove: null,
         capturedStones: null,
-        lastMove: null
+        lastMove: null,
+        chatMessages: JSON.stringify([])
       });
       
       isInitialLoad.current = true;
@@ -941,7 +958,8 @@ export default function App() {
         hostId: user.uid,
         winningMove: null,
         capturedStones: null,
-        lastMove: null
+        lastMove: null,
+        chatMessages: JSON.stringify([])
       });
       
       isInitialLoad.current = true;
@@ -975,6 +993,39 @@ export default function App() {
       console.error("Failed to copy link:", err);
     }
   };
+
+  // --- SEND CHAT FUNCTION ---
+  const handleSendChat = async (e) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !roomId || !user || !db) return;
+    
+    const newMsg = {
+      id: Date.now(),
+      sender: getPlayerName(user),
+      text: chatInput.trim(),
+      role: playerRole
+    };
+    
+    // Database Saver: Keep only the last 20 messages at any time to prevent huge document payloads
+    const updatedChat = [...chatMessages, newMsg].slice(-20);
+    
+    setChatInput('');
+    setChatMessages(updatedChat); // Instant visual update
+    
+    try {
+      const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
+      await updateDoc(roomRef, { chatMessages: JSON.stringify(updatedChat) });
+    } catch (err) {
+      console.error("Chat sync failed", err);
+    }
+  };
+
+  // Scroll to bottom of chat automatically
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages]);
 
   const startVsAI = () => {
     setRoomId(null);
@@ -1231,6 +1282,54 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {/* --- IN-GAME CHAT UI (ONLY SHOWS ONLINE) --- */}
+        {roomId && (
+          <div className="w-full mt-4 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col h-40 relative z-10 animate-in fade-in duration-300">
+            <div className="bg-gray-50 px-3 py-1.5 border-b border-gray-200 flex items-center gap-1.5 text-[10px] font-black uppercase text-gray-500 tracking-wider">
+              <MessageSquare size={12} /> Match Chat
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50/50">
+              {chatMessages.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-gray-400 text-[10px] font-bold px-4 text-center">
+                  Say hi! Messages are permanently erased when the game is reset.
+                </div>
+              ) : (
+                chatMessages.map(msg => {
+                  const isMe = msg.sender === getPlayerName(user);
+                  const isSpectator = msg.role === 'spectator';
+                  
+                  return (
+                    <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                      <span className="text-[8px] text-gray-400 font-bold mb-0.5 px-1 flex items-center gap-1">
+                        {isSpectator && <Eye size={8} className="text-purple-400" />} {msg.sender}
+                      </span>
+                      <div className={`px-2.5 py-1.5 rounded-lg text-xs shadow-sm max-w-[85%] break-words ${isMe ? 'bg-indigo-600 text-white rounded-br-none' : isSpectator ? 'bg-purple-100 text-purple-800 border border-purple-200 rounded-bl-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none'}`}>
+                        {msg.text}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            <form onSubmit={handleSendChat} className="flex border-t border-gray-200 bg-white p-1.5 gap-1.5">
+              <input 
+                type="text" 
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Type a message..." 
+                maxLength={80} // Restrict length to save database space
+                className="flex-1 bg-gray-100 border-none rounded-lg px-3 text-xs focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+              />
+              <button type="submit" disabled={!chatInput.trim()} className="bg-indigo-600 text-white p-2 rounded-lg disabled:opacity-50 hover:bg-indigo-700 transition-colors shadow-sm active:scale-95">
+                <Send size={14} />
+              </button>
+            </form>
+          </div>
+        )}
       </div>
 
       {/* --- STYLISH FOOTER --- */}
