@@ -3,7 +3,7 @@ import {
   Instagram, RotateCcw, ChevronRight, Undo2, Trophy, 
   Swords, Zap, Layout, Globe, Copy, User, CheckCircle2, 
   LogIn, LogOut, Mail, Lock, ShieldCheck, AlertCircle, XCircle, Award, Eye, Bot,
-  MessageSquare, Send
+  MessageSquare, Send, Check, Hexagon
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -56,8 +56,24 @@ if (firebaseConfig.apiKey) {
 }
 
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// --- GAME CONSTANTS ---
 const SIZE = 9;
 const KOMI = 6.5;
+
+const NEX_BOARD_SIZE = 11; 
+const HEX_SIZE = 16; 
+const HEX_WIDTH = Math.sqrt(3) * HEX_SIZE;
+const HEX_HEIGHT = 2 * HEX_SIZE;
+
+const hexPoints = [
+  [0, -HEX_SIZE],
+  [HEX_WIDTH / 2, -HEX_SIZE / 2],
+  [HEX_WIDTH / 2, HEX_SIZE / 2],
+  [0, HEX_SIZE],
+  [-HEX_WIDTH / 2, HEX_SIZE / 2],
+  [-HEX_WIDTH / 2, -HEX_SIZE / 2],
+].map(p => p.join(',')).join(' ');
 
 const getPlayerName = (u) => {
   if (!u) return "Unknown";
@@ -121,6 +137,7 @@ const i18n = {
     koMsg: "Ko rule: Position repeat blocked.", gameOver: "Game Over! {winner} wins {b} to {w}",
     killWin: "Kill! {winner} captured a stone and wins!", passedMsg: "{player} passed.",
     resetNotify: "Game Reset", undoNotify: "Undone", modeClassic: "Classic Go", modeKill: "Kill Mode",
+    modeNex: "NEX",
     playOnline: "Play Online", copyLink: "Copy Link", onlineAs: "Playing as:", linkCopied: "Link Copied!",
     localMode: "Local Mode", loginTitle: "Enter the Dojo", email: "Email Address", password: "Password",
     username: "Username", signIn: "Sign In", signUp: "Create Account", noAccount: "New player? Register",
@@ -145,6 +162,7 @@ const i18n = {
     koMsg: "Regra Ko: Repetição bloqueada.", gameOver: "Fim! {winner} vence por {b} a {w}",
     killWin: "Kill! {winner} capturou uma peça e venceu!", passedMsg: "{player} passou.",
     resetNotify: "Reiniciado", undoNotify: "Desfeito", modeClassic: "Go Clássico", modeKill: "Modo Kill",
+    modeNex: "NEX",
     playOnline: "Jogar Online", copyLink: "Copiar Link", onlineAs: "Jogando como:", linkCopied: "Link Copiado!",
     localMode: "Modo Local", loginTitle: "Entrar no Dojo", email: "E-mail", password: "Senha",
     username: "Usuário", signIn: "Entrar", signUp: "Criar Conta", noAccount: "Novo jogador? Registre-se",
@@ -217,14 +235,17 @@ export default function App() {
   const [authErrorMsg, setAuthErrorMsg] = useState('');
   const [dbError, setDbError] = useState('');
 
+  // --- ATARI GO STATE ---
   const [board, setBoard] = useState(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
   const [currentPlayer, setCurrentPlayer] = useState(1);
   const [captures, setCaptures] = useState({ 1: 0, 2: 0 });
   const [lastBoardState, setLastBoardState] = useState(null);
   const [history, setHistory] = useState([]); 
   const [passCount, setPassCount] = useState(0);
+
+  // --- GLOBAL APP STATE ---
   const [lang, setLang] = useState('en');
-  const [gameMode, setGameMode] = useState('classic');
+  const [gameMode, setGameMode] = useState('classic'); // classic, kill, nex
   const [message, setMessage] = useState('');
   const [showResetModal, setShowResetModal] = useState(false);
   const [isGameOver, setIsGameOver] = useState(false);
@@ -232,7 +253,7 @@ export default function App() {
   const [playerRole, setPlayerRole] = useState(null); 
   const [isCopied, setIsCopied] = useState(false);
   
-  // --- VISUAL HIGHLIGHT STATES ---
+  // --- ATARI GO VISUAL HIGHLIGHTS ---
   const [winningMove, setWinningMove] = useState(null);
   const [capturedStones, setCapturedStones] = useState([]);
   const [lastMove, setLastMove] = useState(null); 
@@ -252,7 +273,7 @@ export default function App() {
   // --- LEADERBOARD STATE ---
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [leaderboardData, setLeaderboardData] = useState([]);
-  const [leaderboardSort, setLeaderboardSort] = useState('kill'); // Default to Kill for the tournament
+  const [leaderboardSort, setLeaderboardSort] = useState('kill');
 
   // --- IDLE SYSTEM STATE ---
   const [isAloneInRoom, setIsAloneInRoom] = useState(false);
@@ -261,6 +282,171 @@ export default function App() {
   const idleTimerRef = useRef(null);
   const promptTimerRef = useRef(null);
   const isInitialLoad = useRef(true);
+
+  // ==========================================
+  // --- NEX MODE SPECIFIC STATE & LOGIC ---
+  // ==========================================
+  const [nexBoard, setNexBoard] = useState(Array(NEX_BOARD_SIZE).fill().map(() => Array(NEX_BOARD_SIZE).fill(0)));
+  const [nexDraftBoard, setNexDraftBoard] = useState(Array(NEX_BOARD_SIZE).fill().map(() => Array(NEX_BOARD_SIZE).fill(0)));
+  const [nexTurn, setNexTurn] = useState(1);
+  const [nexWinner, setNexWinner] = useState(null);
+  const [nexWinningPath, setNexWinningPath] = useState(new Set());
+  const [nexMoveHistory, setNexMoveHistory] = useState([]);
+  
+  const nexCurrentPlayer = nexTurn % 2 !== 0 ? 1 : 2; // 1 = Black, 2 = White
+  const [nexActiveTool, setNexActiveTool] = useState(nexCurrentPlayer);
+
+  useEffect(() => {
+    if (gameMode === 'nex') {
+      setNexActiveTool(nexCurrentPlayer);
+    }
+  }, [nexTurn, nexCurrentPlayer, gameMode]);
+
+  const checkNexWin = useCallback((player, currentBoard) => {
+    const visited = Array(NEX_BOARD_SIZE).fill().map(() => Array(NEX_BOARD_SIZE).fill(false));
+    const parentMap = new Map();
+    const queue = [];
+
+    for (let i = 0; i < NEX_BOARD_SIZE; i++) {
+      if (player === 1 && currentBoard[0][i] === 1) { // Black Top to Bottom
+        queue.push([0, i]); visited[0][i] = true; parentMap.set(`0,${i}`, null);
+      } else if (player === 2 && currentBoard[i][0] === 2) { // White Left to Right
+        queue.push([i, 0]); visited[i][0] = true; parentMap.set(`${i},0`, null);
+      }
+    }
+
+    while (queue.length > 0) {
+      const [r, c] = queue.shift();
+      if ((player === 1 && r === NEX_BOARD_SIZE - 1) || (player === 2 && c === NEX_BOARD_SIZE - 1)) {
+        const path = new Set();
+        let curr = `${r},${c}`;
+        while (curr !== null) { path.add(curr); curr = parentMap.get(curr); }
+        return path;
+      }
+
+      const neighbors = [[r - 1, c], [r - 1, c + 1], [r, c - 1], [r, c + 1], [r + 1, c - 1], [r + 1, c]];
+      for (const [nr, nc] of neighbors) {
+        if (nr >= 0 && nr < NEX_BOARD_SIZE && nc >= 0 && nc < NEX_BOARD_SIZE) {
+          if (currentBoard[nr][nc] === player && !visited[nr][nc]) {
+            visited[nr][nc] = true;
+            queue.push([nr, nc]);
+            parentMap.set(`${nr},${nc}`, `${r},${c}`);
+          }
+        }
+      }
+    }
+    return null;
+  }, []);
+
+  const getNexDraftStatus = () => {
+    let emptyToP = 0, emptyToN = 0, nToP = 0, pToN = 0, invalid = 0;
+    const p = nexCurrentPlayer;
+    const n = 3; // Neutral
+
+    for (let r = 0; r < NEX_BOARD_SIZE; r++) {
+      for (let c = 0; c < NEX_BOARD_SIZE; c++) {
+        const orig = nexBoard[r][c];
+        const draft = nexDraftBoard[r][c];
+        if (orig !== draft) {
+          if (orig === 0 && draft === p) emptyToP++;
+          else if (orig === 0 && draft === n) emptyToN++;
+          else if (orig === n && draft === p) nToP++;
+          else if (orig === p && draft === n) pToN++;
+          else invalid++; 
+        }
+      }
+    }
+
+    let isValid = false;
+    let ruleText = "";
+
+    if (invalid > 0) {
+      ruleText = "Invalid move: Cannot modify opponent.";
+    } else if (nexTurn === 1) {
+      isValid = (emptyToP === 1 && emptyToN === 1 && nToP === 0 && pToN === 0);
+      ruleText = isValid ? "Valid Move! Press Confirm." : "First Turn: 1 Stone + 1 Neutral.";
+    } else {
+      const condA = (emptyToP === 1 && emptyToN === 1 && nToP === 0 && pToN === 0);
+      const condB = (emptyToP === 0 && emptyToN === 0 && nToP === 2 && pToN === 1);
+      
+      if (condA || condB) {
+        isValid = true;
+        ruleText = "Valid Move! Press Confirm.";
+      } else {
+        ruleText = "(1 Stone + 1 Neutral) OR (2 Neutrals -> 1 Stone)";
+      }
+    }
+    
+    const hasDrafts = (emptyToP + emptyToN + nToP + pToN + invalid) > 0;
+    return { isValid, ruleText, hasDrafts };
+  };
+
+  const { isValid: nexIsValid, ruleText: nexRuleText, hasDrafts: nexHasDrafts } = getNexDraftStatus();
+
+  const handleNexHexClick = (r, c) => {
+    if (nexWinner || isGameOver) return;
+    playSound('place');
+    const orig = nexBoard[r][c];
+    const draft = nexDraftBoard[r][c];
+    const newDraft = nexDraftBoard.map(row => [...row]);
+
+    if (draft === nexActiveTool) {
+      newDraft[r][c] = orig;
+    } else {
+      newDraft[r][c] = nexActiveTool;
+    }
+    setNexDraftBoard(newDraft);
+  };
+
+  const confirmNexTurn = () => {
+    if (!nexIsValid) return;
+
+    setNexMoveHistory(prev => [...prev, {
+      board: nexBoard.map(row => [...row]),
+      turn: nexTurn,
+      winner: nexWinner,
+      winningPath: nexWinningPath
+    }]);
+
+    const newBoard = nexDraftBoard.map(row => [...row]);
+    setNexBoard(newBoard);
+
+    const pathBlack = checkNexWin(1, newBoard);
+    const pathWhite = checkNexWin(2, newBoard);
+
+    if (pathBlack) {
+      setNexWinner(1); setNexWinningPath(pathBlack);
+      setIsGameOver(true);
+      playSound('win');
+      setMessage(t.gameOver.replace('{winner}', t.black).replace('{b}', 'Win').replace('{w}', '-'));
+    } else if (pathWhite) {
+      setNexWinner(2); setNexWinningPath(pathWhite);
+      setIsGameOver(true);
+      playSound('win');
+      setMessage(t.gameOver.replace('{winner}', t.white).replace('{b}', '-').replace('{w}', 'Win'));
+    } else {
+      setNexTurn(t => t + 1);
+    }
+  };
+
+  const handleNexUndo = () => {
+    if (nexHasDrafts) {
+      setNexDraftBoard(nexBoard.map(row => [...row]));
+    } else if (nexMoveHistory.length > 0) {
+      const lastState = nexMoveHistory[nexMoveHistory.length - 1];
+      setNexBoard(lastState.board);
+      setNexDraftBoard(lastState.board);
+      setNexTurn(lastState.turn);
+      setNexWinner(lastState.winner);
+      setNexWinningPath(lastState.winningPath);
+      setNexMoveHistory(prev => prev.slice(0, -1));
+      setIsGameOver(false);
+    }
+  };
+
+  // ==========================================
+  // --- CORE APP EFFECTS & HELPERS ---
+  // ==========================================
 
   const t = i18n[lang];
 
@@ -276,7 +462,6 @@ export default function App() {
     }
   }, [message, isGameOver]);
 
-  // --- AUTH LISTENER ---
   useEffect(() => {
     if (!auth) return;
 
@@ -303,12 +488,11 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- URL JOIN LISTENER ---
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlRoomId = params.get('room');
     
-    if (urlRoomId && !roomId && user && db) {
+    if (urlRoomId && !roomId && user && db && gameMode !== 'nex') {
       if (user.isAnonymous) {
         setAuthErrorMsg(t.mustLoginToJoin);
         setIsAuthModalOpen(true);
@@ -336,7 +520,6 @@ export default function App() {
               role = 2;
               await updateDoc(roomRef, { player2Id: user.uid, player2Name: name });
             } else {
-              // Room is full, join as a Spectator automatically
               role = 'spectator';
             }
             
@@ -351,9 +534,8 @@ export default function App() {
       };
       joinExistingRoom();
     }
-  }, [user, roomId, db, t.mustLoginToJoin]);
+  }, [user, roomId, db, t.mustLoginToJoin, gameMode]);
 
-  // --- SAFE LOCAL RESET HELPER ---
   const resetToLocal = useCallback((customMessage = '') => {
     setRoomId(null);
     setPlayerRole(null);
@@ -361,20 +543,37 @@ export default function App() {
     setIsBotThinking(false);
     window.history.replaceState({}, '', window.location.pathname);
     
+    // Reset Atari Go
     setBoard(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0)));
     setCurrentPlayer(1);
     setCaptures({ 1: 0, 2: 0 });
     setHistory([]);
     setPassCount(0);
-    setIsGameOver(false);
     setWinningMove(null);
     setCapturedStones([]);
     setLastMove(null);
     setChatMessages([]);
+    
+    // Reset NEX (Ensuring isolated memory arrays so React always re-renders)
+    const emptyNex1 = Array(NEX_BOARD_SIZE).fill().map(() => Array(NEX_BOARD_SIZE).fill(0));
+    const emptyNex2 = Array(NEX_BOARD_SIZE).fill().map(() => Array(NEX_BOARD_SIZE).fill(0));
+    setNexBoard(emptyNex1);
+    setNexDraftBoard(emptyNex2);
+    setNexTurn(1);
+    setNexWinner(null);
+    setNexWinningPath(new Set());
+    setNexMoveHistory([]);
+
+    setIsGameOver(false);
     setMessage(typeof customMessage === 'string' ? customMessage : '');
   }, []);
 
-  // --- CLEAN EXIT ONLINE & DATABASE CLEANUP ---
+  const handleModeChange = (m) => {
+    if (roomId) return; 
+    setGameMode(m);
+    resetToLocal();
+  };
+
   const handleExitOnline = useCallback(async (msg = '') => {
     if (roomId && user && db && playerRole) {
       try {
@@ -404,9 +603,9 @@ export default function App() {
     resetToLocal(typeof msg === 'string' ? msg : '');
   }, [roomId, user, db, playerRole, resetToLocal]);
 
-  // --- FIRESTORE SYNC & SOUND PLAYBACK ---
+  // --- ATARI GO SPECIFIC SYNC & LOGIC ---
   useEffect(() => {
-    if (!user || !roomId || !db) return;
+    if (!user || !roomId || !db || gameMode === 'nex') return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
     
     const unsubscribe = onSnapshot(roomRef, (snapshot) => {
@@ -447,7 +646,6 @@ export default function App() {
           
           if (data.message) showFlashMessage(data.message);
           
-          // Sync Chat
           setChatMessages(data.chatMessages ? JSON.parse(data.chatMessages) : []);
         }
       } else {
@@ -455,10 +653,10 @@ export default function App() {
       }
     }, (error) => {
       console.error("Sync error:", error);
-      setDbError("Lost connection to the room. Database read permission denied.");
+      setDbError("Lost connection to the room.");
     });
     return () => unsubscribe();
-  }, [user, roomId, showFlashMessage, t.waiting, resetToLocal, isGameOver]);
+  }, [user, roomId, showFlashMessage, t.waiting, resetToLocal, isGameOver, gameMode]);
 
   // --- IDLE TIMER SYSTEM ---
   useEffect(() => {
@@ -501,7 +699,7 @@ export default function App() {
       setLeaderboardData(data);
     }, (error) => {
       console.error("Leaderboard fetch error:", error);
-      setDbError("Unable to fetch leaderboard. Permission denied.");
+      setDbError("Unable to fetch leaderboard.");
     });
     
     return () => unsub();
@@ -540,7 +738,7 @@ export default function App() {
   }, [user, db]);
 
   const syncToCloud = useCallback(async (newBoard, nextPlayer, newCaptures, gameOver, newPassCount, customMessage = "", winMove = null, capStones = [], mvObj = null, clearChat = false) => {
-    if (!roomId || !user || !db) return;
+    if (!roomId || !user || !db || gameMode === 'nex') return;
     const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
     try {
       const payload = {
@@ -558,17 +756,15 @@ export default function App() {
         updatedAt: Date.now()
       };
       
-      // Database Saver: Explicitly wipe chat payload if clearChat is triggered
       if (clearChat) payload.chatMessages = JSON.stringify([]);
-      
       await updateDoc(roomRef, payload);
     } catch (e) {
       console.error("Cloud sync failed", e);
       setDbError("Move not saved! Database write permission denied.");
     }
-  }, [roomId, user, gameMode]);
+  }, [roomId, user, gameMode, db]);
 
-  // --- GAME LOGIC FUNCTIONS ---
+  // --- ATARI GO LOGIC ---
   const findGroupAndLiberties = useCallback((tempBoard, r, c) => {
     const color = tempBoard[r][c];
     if (color === 0) return { group: [], liberties: [] };
@@ -605,6 +801,7 @@ export default function App() {
   }, [findGroupAndLiberties]);
 
   const scoreData = useMemo(() => {
+    if (gameMode === 'nex') return { blackTerritory: 0, whiteTerritory: 0, emptyCount: 0 };
     let blackTerritory = 0, whiteTerritory = 0, emptyCount = 0;
     const visited = new Set();
     for (let r = 0; r < SIZE; r++) {
@@ -635,12 +832,11 @@ export default function App() {
       }
     }
     return { blackTerritory, whiteTerritory, emptyCount };
-  }, [board]);
+  }, [board, gameMode]);
 
   const handleMove = useCallback((r, c, isBot = false) => {
-    if (board[r][c] !== 0 || isGameOver) return;
+    if (gameMode === 'nex' || board[r][c] !== 0 || isGameOver) return;
     
-    // Block user from moving if it's not their turn, UNLESS it's the bot making an automated move
     if (!isBot && playerRole && currentPlayer !== playerRole) return; 
     
     const testBoard = board.map(row => [...row]);
@@ -660,7 +856,6 @@ export default function App() {
       return;
     }
     
-    // Valid move execution
     setHistory(prev => [...prev, { board: board.map(row => [...row]), currentPlayer, captures: { ...captures }, lastBoardState }]);
     setLastBoardState(JSON.stringify(board));
     const newBoard = testBoard;
@@ -704,7 +899,7 @@ export default function App() {
   }, [board, isGameOver, playerRole, currentPlayer, findCaptures, findGroupAndLiberties, lastBoardState, captures, gameMode, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
 
   const handlePass = useCallback((isBot = false) => {
-    if (isGameOver || (!isBot && playerRole && currentPlayer !== playerRole)) return;
+    if (gameMode === 'nex' || isGameOver || (!isBot && playerRole && currentPlayer !== playerRole)) return;
     setHistory(prev => [...prev, { board: board.map(row => [...row]), currentPlayer, captures: { ...captures }, lastBoardState }]);
     const nextPass = passCount + 1;
     let gameOver = isGameOver;
@@ -736,34 +931,23 @@ export default function App() {
     setCurrentPlayer(nextPlayer);
     setLastMove(null); 
     if (roomId) syncToCloud(board, nextPlayer, captures, gameOver, nextPass, passMsg, null, [], null);
-  }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard]);
+  }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard, gameMode]);
 
   const resetGame = useCallback(() => {
-    if (roomId && !playerRole && playerRole !== 'spectator') return; 
-    
-    const emptyBoard = Array(SIZE).fill(null).map(() => Array(SIZE).fill(0));
-    setBoard(emptyBoard);
-    setCurrentPlayer(1);
-    setCaptures({ 1: 0, 2: 0 });
-    setHistory([]);
-    setPassCount(0);
-    setIsGameOver(false);
-    setWinningMove(null);
-    setCapturedStones([]);
-    setLastMove(null);
-    setIsBotThinking(false);
-    setShowResetModal(false);
+    resetToLocal();
     showFlashMessage(t.resetNotify);
     setTimeout(() => setMessage(''), 3000);
+    setShowResetModal(false);
     
-    // Pass `true` at the end to wipe the chat from the Firebase Database!
-    if (roomId) syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "", null, [], null, true);
-  }, [roomId, playerRole, t, showFlashMessage, syncToCloud]);
+    if (roomId && gameMode !== 'nex') {
+      const emptyBoard = Array(SIZE).fill(null).map(() => Array(SIZE).fill(0));
+      syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "", null, [], null, true);
+    }
+  }, [roomId, t, showFlashMessage, syncToCloud, resetToLocal, gameMode]);
 
   const undoMove = useCallback(() => {
-    if (history.length === 0 || isGameOver || !!roomId) return; 
+    if (history.length === 0 || isGameOver || !!roomId || gameMode === 'nex') return; 
     
-    // If playing vs AI, undo needs to pop TWO moves off the stack to get back to User's turn
     let targetHistoryIndex = history.length - 1;
     if (isVsAI && history.length >= 2) {
        targetHistoryIndex = history.length - 2; 
@@ -778,9 +962,9 @@ export default function App() {
     setLastMove(null); 
     showFlashMessage(t.undoNotify);
     setTimeout(() => setMessage(''), 3000);
-  }, [history, isGameOver, roomId, t, showFlashMessage, isVsAI]);
+  }, [history, isGameOver, roomId, t, showFlashMessage, isVsAI, gameMode]);
 
-  // --- SMART GREEDY AI BOT ENGINE ---
+  // --- AI LOGIC ---
   const makeBotMove = useCallback(() => {
     let validMoves = [];
     let winningMoves = [];
@@ -789,9 +973,8 @@ export default function App() {
     for (let r = 0; r < SIZE; r++) {
       for (let c = 0; c < SIZE; c++) {
         if (board[r][c] === 0) {
-          // Simulate bot move
           const testBoard = board.map(row => [...row]);
-          testBoard[r][c] = 2; // Bot is White (2)
+          testBoard[r][c] = 2; 
           const capturedUser = findCaptures(testBoard, 1);
           capturedUser.forEach(pos => testBoard[pos.r][pos.c] = 0);
           const { liberties } = findGroupAndLiberties(testBoard, r, c);
@@ -801,11 +984,8 @@ export default function App() {
 
           if (!isSuicide && !isKo) {
              validMoves.push({r, c});
-             
-             // Check 1: Will this win the game or capture a stone?
              if (capturedUser.length > 0) winningMoves.push({r, c});
 
-             // Check 2: Would the user playing here capture one of our stones? (Block them!)
              const userTestBoard = board.map(row => [...row]);
              userTestBoard[r][c] = 1;
              const capturedBot = findCaptures(userTestBoard, 2);
@@ -820,7 +1000,6 @@ export default function App() {
       return;
     }
 
-    // Check 3: Play adjacent to existing stones for structure
     let adjacentMoves = [];
     validMoves.forEach(move => {
       const {r, c} = move;
@@ -829,7 +1008,6 @@ export default function App() {
       if (hasNeighbor) adjacentMoves.push(move);
     });
 
-    // EXECUTE PRIORITY DECISION
     let chosenMove = null;
     if (winningMoves.length > 0) chosenMove = winningMoves[Math.floor(Math.random() * winningMoves.length)];
     else if (blockingMoves.length > 0) chosenMove = blockingMoves[Math.floor(Math.random() * blockingMoves.length)];
@@ -839,17 +1017,16 @@ export default function App() {
     handleMove(chosenMove.r, chosenMove.c, true);
   }, [board, findCaptures, findGroupAndLiberties, lastBoardState, handleMove, handlePass]);
 
-  // AI TURN TRIGGER
   useEffect(() => {
-    if (isVsAI && currentPlayer === 2 && !isGameOver && !roomId) {
+    if (isVsAI && currentPlayer === 2 && !isGameOver && !roomId && gameMode !== 'nex') {
       setIsBotThinking(true);
       const timer = setTimeout(() => {
         makeBotMove();
         setIsBotThinking(false);
-      }, 700); // 700ms human-like thinking delay
+      }, 700); 
       return () => clearTimeout(timer);
     }
-  }, [currentPlayer, isVsAI, isGameOver, roomId, makeBotMove]);
+  }, [currentPlayer, isVsAI, isGameOver, roomId, makeBotMove, gameMode]);
 
 
   const handleAuth = async (e) => {
@@ -882,6 +1059,7 @@ export default function App() {
   }, [handleExitOnline]);
 
   const startOnlineRoom = async () => {
+    if (gameMode === 'nex') return;
     setDbError(''); 
     if (!user) { setIsAuthModalOpen(true); return; }
     if (!db) { setDbError("Database is not connected."); return; }
@@ -921,17 +1099,17 @@ export default function App() {
     } catch (error) {
       console.error("Room creation failed:", error);
       if (error.code === 'permission-denied') {
-        setDbError("Permission Denied: Your Firestore rules are blocking writes. Please go to your Firebase Console -> Firestore -> Rules, and set them to allow read/write.");
+        setDbError("Permission Denied: Your Firestore rules are blocking writes.");
       } else {
-        setDbError(`Database Error: ${error.message}. Please ensure Firestore is initialized in your Firebase Console.`);
+        setDbError(`Database Error: ${error.message}`);
       }
     } finally {
       setIsCreatingRoom(false);
     }
   };
 
-  // --- NEW: HOST TOURNAMENT AS SPECTATOR ---
   const startSpectatorRoom = async () => {
+    if (gameMode === 'nex') return;
     setDbError(''); 
     if (!user) { setIsAuthModalOpen(true); return; }
     if (!db) { setDbError("Database is not connected."); return; }
@@ -941,7 +1119,6 @@ export default function App() {
       const newRoomId = Math.random().toString(36).substring(2, 9);
       const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', newRoomId);
       
-      // Leave BOTH player slots empty so the competitors can join via the link
       await setDoc(roomRef, {
         board: JSON.stringify(Array(SIZE).fill(null).map(() => Array(SIZE).fill(0))),
         currentPlayer: 1, 
@@ -994,7 +1171,6 @@ export default function App() {
     }
   };
 
-  // --- SEND CHAT FUNCTION ---
   const handleSendChat = async (e) => {
     e.preventDefault();
     if (!chatInput.trim() || !roomId || !user || !db) return;
@@ -1006,11 +1182,10 @@ export default function App() {
       role: playerRole
     };
     
-    // Database Saver: Keep only the last 20 messages at any time to prevent huge document payloads
     const updatedChat = [...chatMessages, newMsg].slice(-20);
     
     setChatInput('');
-    setChatMessages(updatedChat); // Instant visual update
+    setChatMessages(updatedChat); 
     
     try {
       const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId);
@@ -1020,7 +1195,6 @@ export default function App() {
     }
   };
 
-  // Scroll to bottom of chat automatically
   useEffect(() => {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -1028,9 +1202,10 @@ export default function App() {
   }, [chatMessages]);
 
   const startVsAI = () => {
+    if (gameMode === 'nex') return;
     setRoomId(null);
     setIsVsAI(true);
-    setPlayerRole(1); // User is always Black against AI
+    setPlayerRole(1); 
     resetGame();
   };
 
@@ -1045,6 +1220,18 @@ export default function App() {
       </div>
     );
   }
+
+  // --- NEX VIEWBOX CALCULATIONS ---
+  const minX = -(NEX_BOARD_SIZE) * HEX_WIDTH / 2 - HEX_WIDTH;
+  const minY = -HEX_HEIGHT * 1.5;
+  const nexVbWidth = NEX_BOARD_SIZE * HEX_WIDTH + 2 * HEX_WIDTH;
+  const nexVbHeight = (NEX_BOARD_SIZE * 2) * HEX_HEIGHT * 0.75 + 2 * HEX_HEIGHT;
+  const viewBox = `${minX} ${minY} ${nexVbWidth} ${nexVbHeight}`;
+
+  const TOP_CX = 0, TOP_CY = 0;
+  const RIGHT_CX = (NEX_BOARD_SIZE - 1) * (HEX_WIDTH / 2), RIGHT_CY = (NEX_BOARD_SIZE - 1) * (HEX_HEIGHT * 0.75);
+  const BOTTOM_CX = 0, BOTTOM_CY = (NEX_BOARD_SIZE - 1) * 2 * (HEX_HEIGHT * 0.75);
+  const LEFT_CX = -(NEX_BOARD_SIZE - 1) * (HEX_WIDTH / 2), LEFT_CY = (NEX_BOARD_SIZE - 1) * (HEX_HEIGHT * 0.75);
 
   return (
     <div className="flex flex-col items-center justify-start min-h-screen bg-gray-100 font-sans p-2 sm:p-4 pb-20 sm:pt-4 relative">
@@ -1070,11 +1257,11 @@ export default function App() {
 
         <div className="flex justify-between items-center">
             <div className="flex bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                {['classic', 'kill'].map(m => (
-                    <button key={m} onClick={() => { if(!roomId) { setGameMode(m); resetGame(); } }} disabled={!!roomId}
+                {['classic', 'kill', 'nex'].map(m => (
+                    <button key={m} onClick={() => handleModeChange(m)} disabled={!!roomId}
                       className={`px-3 py-1.5 text-[10px] font-bold transition-colors ${gameMode === m ? 'bg-indigo-600 text-white' : 'hover:bg-gray-50 text-gray-600'} disabled:opacity-50`}
                     >
-                    {m === 'classic' ? t.modeClassic : t.modeKill}
+                    {m === 'classic' ? t.modeClassic : m === 'kill' ? t.modeKill : t.modeNex}
                     </button>
                 ))}
             </div>
@@ -1105,17 +1292,16 @@ export default function App() {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             {!roomId ? (
               <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-start w-full">
-                <button onClick={startOnlineRoom} disabled={isCreatingRoom} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all disabled:opacity-50">
+                <button onClick={startOnlineRoom} disabled={isCreatingRoom || gameMode === 'nex'} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition-all disabled:opacity-50">
                   <Globe size={14} className={isCreatingRoom ? "animate-spin" : ""} /> {isCreatingRoom ? "..." : t.playOnline}
                 </button>
                 
-                <button onClick={startSpectatorRoom} disabled={isCreatingRoom} className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 text-white rounded-lg text-xs font-bold shadow-md hover:bg-purple-700 active:scale-95 transition-all disabled:opacity-50">
+                <button onClick={startSpectatorRoom} disabled={isCreatingRoom || gameMode === 'nex'} className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 text-white rounded-lg text-xs font-bold shadow-md hover:bg-purple-700 active:scale-95 transition-all disabled:opacity-50">
                   <Eye size={14} /> {t.spectator}
                 </button>
                 
-                {/* --- NEW BOT TOGGLE BUTTON --- */}
                 {!isVsAI ? (
-                  <button onClick={startVsAI} className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold shadow-md hover:bg-slate-900 active:scale-95 transition-all">
+                  <button onClick={startVsAI} disabled={gameMode === 'nex'} className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold shadow-md hover:bg-slate-900 active:scale-95 transition-all disabled:opacity-50">
                     <Bot size={14} /> {t.playAI}
                   </button>
                 ) : (
@@ -1168,85 +1354,252 @@ export default function App() {
             </div>
         )}
         
-        <div className={`grid grid-cols-3 w-full mb-4 px-2 py-3 rounded-xl border border-gray-200 gap-1 transition-colors ${gameMode === 'kill' ? 'bg-red-50' : 'bg-gray-50'}`}>
-          <div className="flex flex-col items-start min-w-0">
-            <div className="flex items-center gap-1 mb-1">
-              <div className={`w-2.5 h-2.5 rounded-full bg-black shadow-sm ${currentPlayer === 1 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
-              <span className="font-bold text-[10px] sm:text-xs truncate">{roomId ? playerNames[1] : (isVsAI ? t.black + " (You)" : t.black)}</span>
+        {/* --- DYNAMIC HEADER INFO --- */}
+        {gameMode === 'nex' ? (
+          <div className={`w-full mb-4 px-3 py-3 rounded-xl border flex flex-col items-center justify-center gap-1 transition-colors ${nexIsValid ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-200'}`}>
+            <div className="flex items-center gap-2 font-black text-xs uppercase tracking-widest">
+              {isGameOver ? (
+                <span className="text-indigo-600 flex items-center gap-1"><Trophy size={14}/> {message || 'GAME OVER'}</span>
+              ) : (
+                <span className={nexCurrentPlayer === 1 ? 'text-gray-900' : 'text-gray-500'}>
+                  {nexCurrentPlayer === 1 ? t.black : t.white}{t.turnSuffix}
+                </span>
+              )}
             </div>
-            {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.blackTerritory}</p>}
-            <p className="text-[8px] text-gray-500 truncate">{t.caps}: {captures[1]}</p>
-            <p className="text-sm sm:text-base font-black text-black">{(gameMode === 'classic' ? (scoreData.blackTerritory + captures[1]) : captures[1]).toFixed(1)}</p>
+            {!isGameOver && (
+              <span className={`text-[9px] font-bold ${nexIsValid ? 'text-emerald-600' : 'text-gray-500'}`}>
+                {nexRuleText}
+              </span>
+            )}
           </div>
-          <div className="flex flex-col items-center justify-center border-x border-gray-200 text-center">
-            <div className={`text-[8px] font-black uppercase tracking-tighter mb-0.5 truncate w-full ${isGameOver ? 'text-green-600' : 'text-blue-600'}`}>
-              {isGameOver ? 'FINISH' : isBotThinking ? (
-                 <span className="flex items-center justify-center gap-1 text-slate-500"><Bot size={10} className="animate-bounce" /> {t.botThinking}</span>
-              ) : `${roomId ? playerNames[currentPlayer] : (isVsAI && currentPlayer === 2 ? t.botName : (currentPlayer === 1 ? t.black : t.white))}${t.turnSuffix}`}
+        ) : (
+          <div className={`grid grid-cols-3 w-full mb-4 px-2 py-3 rounded-xl border border-gray-200 gap-1 transition-colors ${gameMode === 'kill' ? 'bg-red-50' : 'bg-gray-50'}`}>
+            <div className="flex flex-col items-start min-w-0">
+              <div className="flex items-center gap-1 mb-1">
+                <div className={`w-2.5 h-2.5 rounded-full bg-black shadow-sm ${currentPlayer === 1 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
+                <span className="font-bold text-[10px] sm:text-xs truncate">{roomId ? playerNames[1] : (isVsAI ? t.black + " (You)" : t.black)}</span>
+              </div>
+              {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.blackTerritory}</p>}
+              <p className="text-[8px] text-gray-500 truncate">{t.caps}: {captures[1]}</p>
+              <p className="text-sm sm:text-base font-black text-black">{(gameMode === 'classic' ? (scoreData.blackTerritory + captures[1]) : captures[1]).toFixed(1)}</p>
             </div>
-            <div className="text-[7px] text-gray-400 font-bold uppercase whitespace-nowrap">
-              {gameMode === 'classic' ? `${scoreData.emptyCount} ${t.pointsRemaining}` : "FIRST KILL WINS"}
+            <div className="flex flex-col items-center justify-center border-x border-gray-200 text-center">
+              <div className={`text-[8px] font-black uppercase tracking-tighter mb-0.5 truncate w-full ${isGameOver ? 'text-green-600' : 'text-blue-600'}`}>
+                {isGameOver ? 'FINISH' : isBotThinking ? (
+                   <span className="flex items-center justify-center gap-1 text-slate-500"><Bot size={10} className="animate-bounce" /> {t.botThinking}</span>
+                ) : `${roomId ? playerNames[currentPlayer] : (isVsAI && currentPlayer === 2 ? t.botName : (currentPlayer === 1 ? t.black : t.white))}${t.turnSuffix}`}
+              </div>
+              <div className="text-[7px] text-gray-400 font-bold uppercase whitespace-nowrap">
+                {gameMode === 'classic' ? `${scoreData.emptyCount} ${t.pointsRemaining}` : "FIRST KILL WINS"}
+              </div>
+            </div>
+            <div className="flex flex-col items-end text-right min-w-0">
+              <div className="flex items-center gap-1 mb-1">
+                <span className="font-bold text-[10px] sm:text-xs truncate">{roomId ? playerNames[2] : (isVsAI ? t.botName : t.white)}</span>
+                <div className={`w-2.5 h-2.5 rounded-full bg-white border border-gray-300 shadow-sm ${currentPlayer === 2 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
+              </div>
+              {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.whiteTerritory}</p>}
+              <p className="text-[8px] text-gray-500 truncate">{t.caps}: {captures[2]}</p>
+              <p className="text-sm sm:text-base font-black text-gray-700">{(gameMode === 'classic' ? (scoreData.whiteTerritory + captures[2] + KOMI) : captures[2]).toFixed(1)}</p>
             </div>
           </div>
-          <div className="flex flex-col items-end text-right min-w-0">
-            <div className="flex items-center gap-1 mb-1">
-              <span className="font-bold text-[10px] sm:text-xs truncate">{roomId ? playerNames[2] : (isVsAI ? t.botName : t.white)}</span>
-              <div className={`w-2.5 h-2.5 rounded-full bg-white border border-gray-300 shadow-sm ${currentPlayer === 2 && !isGameOver ? 'ring-2 ring-blue-400' : ''}`}></div>
-            </div>
-            {gameMode === 'classic' && <p className="text-[8px] text-gray-500 truncate">{t.territory}: {scoreData.whiteTerritory}</p>}
-            <p className="text-[8px] text-gray-500 truncate">{t.caps}: {captures[2]}</p>
-            <p className="text-sm sm:text-base font-black text-gray-700">{(gameMode === 'classic' ? (scoreData.whiteTerritory + captures[2] + KOMI) : captures[2]).toFixed(1)}</p>
+        )}
+
+        {/* --- GAME BOARD RENDERER --- */}
+        {gameMode === 'nex' ? (
+          <div className="relative w-full aspect-square bg-slate-50 rounded-2xl shadow-inner border-2 border-slate-200 overflow-hidden flex items-center justify-center touch-none">
+             
+             {/* Edge connection hints */}
+             <div className="absolute top-0 w-full h-2 bg-gradient-to-b from-gray-900 to-transparent opacity-30"></div>
+             <div className="absolute bottom-0 w-full h-2 bg-gradient-to-t from-gray-900 to-transparent opacity-30"></div>
+             <div className="absolute left-0 w-2 h-full bg-gradient-to-r from-white to-transparent opacity-80 z-10"></div>
+             <div className="absolute right-0 w-2 h-full bg-gradient-to-l from-white to-transparent opacity-80 z-10"></div>
+
+             <svg viewBox={viewBox} className="w-[95%] h-[95%] drop-shadow-lg">
+                <defs>
+                  <radialGradient id="blackHexGrad" cx="35%" cy="35%" r="65%">
+                    <stop offset="0%" stopColor="#4b5563" /><stop offset="40%" stopColor="#111827" /><stop offset="100%" stopColor="#000000" />
+                  </radialGradient>
+                  <radialGradient id="whiteHexGrad" cx="35%" cy="35%" r="65%">
+                    <stop offset="0%" stopColor="#ffffff" /><stop offset="40%" stopColor="#f3f4f6" /><stop offset="100%" stopColor="#d1d5db" />
+                  </radialGradient>
+                  <radialGradient id="neutralHexGrad" cx="35%" cy="35%" r="65%">
+                    <stop offset="0%" stopColor="#9ca3af" /><stop offset="40%" stopColor="#6b7280" /><stop offset="100%" stopColor="#374151" />
+                  </radialGradient>
+                  <filter id="hexShadow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feDropShadow dx="0" dy="2" stdDeviation="2" floodOpacity="0.4" floodColor="#000" />
+                  </filter>
+                  <filter id="hexWinGlow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feGaussianBlur stdDeviation="5" result="coloredBlur"/>
+                    <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                  </filter>
+                </defs>
+
+                {/* Borders for Player Visual Connections */}
+                <path d={`M ${TOP_CX + HEX_WIDTH*0.75},${TOP_CY - HEX_SIZE*0.5} L ${RIGHT_CX + HEX_WIDTH*0.75},${RIGHT_CY - HEX_SIZE*0.5}`} stroke="#111827" strokeWidth="8" strokeLinecap="round" className="opacity-60" />
+                <path d={`M ${LEFT_CX - HEX_WIDTH*0.75},${LEFT_CY + HEX_SIZE*0.5} L ${BOTTOM_CX - HEX_WIDTH*0.75},${BOTTOM_CY + HEX_SIZE*0.5}`} stroke="#111827" strokeWidth="8" strokeLinecap="round" className="opacity-60" />
+                <path d={`M ${TOP_CX - HEX_WIDTH*0.75},${TOP_CY - HEX_SIZE*0.5} L ${LEFT_CX - HEX_WIDTH*0.75},${LEFT_CY - HEX_SIZE*0.5}`} stroke="#ffffff" strokeWidth="8" strokeLinecap="round" className="opacity-90 drop-shadow-sm" />
+                <path d={`M ${RIGHT_CX + HEX_WIDTH*0.75},${RIGHT_CY + HEX_SIZE*0.5} L ${BOTTOM_CX + HEX_WIDTH*0.75},${BOTTOM_CY + HEX_SIZE*0.5}`} stroke="#ffffff" strokeWidth="8" strokeLinecap="round" className="opacity-90 drop-shadow-sm" />
+
+                {nexDraftBoard.map((row, r) => 
+                  row.map((cell, c) => {
+                    const cx = (c - r) * (HEX_WIDTH / 2);
+                    const cy = (c + r) * (HEX_HEIGHT * 0.75);
+                    const isWinningCell = nexWinningPath.has(`${r},${c}`);
+                    const isDrafted = nexBoard[r][c] !== cell;
+                    const spaceNumber = r * NEX_BOARD_SIZE + c + 1;
+
+                    return (
+                      <g 
+                        key={`${r}-${c}`} 
+                        transform={`translate(${cx}, ${cy})`}
+                        onClick={() => handleNexHexClick(r, c)}
+                        className={nexWinner === null ? 'cursor-pointer group' : ''}
+                      >
+                        <polygon 
+                          points={hexPoints}
+                          fill="rgba(255,255,255,0.7)"
+                          stroke={isWinningCell ? '#fbbf24' : '#cbd5e1'}
+                          strokeWidth={isWinningCell ? 3 : 1.5}
+                          className="transition-colors duration-300 hover:fill-slate-100"
+                        />
+
+                        {cell === 0 && nexWinner === null && (
+                          <circle 
+                            cx="0" cy="0" r={HEX_SIZE * 0.7} 
+                            fill={nexActiveTool === 1 ? '#111827' : nexActiveTool === 2 ? '#ffffff' : '#6b7280'} 
+                            className="opacity-0 group-hover:opacity-20 transition-opacity duration-200" 
+                          />
+                        )}
+
+                        {cell !== 0 && (
+                          <circle 
+                            cx="0" cy="0" r={HEX_SIZE * 0.75} 
+                            fill={cell === 1 ? "url(#blackHexGrad)" : cell === 2 ? "url(#whiteHexGrad)" : "url(#neutralHexGrad)"}
+                            stroke={cell === 2 ? "#e5e7eb" : "none"}
+                            strokeWidth="1"
+                            filter={isWinningCell ? "url(#hexWinGlow)" : "url(#hexShadow)"}
+                            className="transition-all duration-300 ease-out"
+                            style={{ animation: 'popIn 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards' }}
+                          />
+                        )}
+
+                        {isDrafted && (
+                          <circle 
+                            cx="0" cy="0" r={HEX_SIZE * 0.85} 
+                            fill="none" stroke="#6366f1" strokeWidth="2" strokeDasharray="3 3"
+                            className="animate-[spin_4s_linear_infinite] opacity-80" 
+                          />
+                        )}
+
+                        <text
+                          x="0" y="1" textAnchor="middle" dominantBaseline="central"
+                          fill={cell === 0 ? "#94a3b8" : (cell === 2 ? "#4b5563" : "#ffffff")}
+                          className="text-[6px] sm:text-[8px] font-bold pointer-events-none transition-colors duration-300 font-mono"
+                        >
+                          {spaceNumber}
+                        </text>
+
+                        {isWinningCell && <circle cx="0" cy="-6" r={2.5} fill="#fbbf24" className="animate-pulse" />}
+                      </g>
+                    );
+                  })
+                )}
+             </svg>
+             <style dangerouslySetInnerHTML={{__html: `
+                @keyframes popIn { 0% { transform: scale(0); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+             `}} />
           </div>
-        </div>
+        ) : (
+          <div className={`relative p-2 sm:p-4 rounded-xl shadow-inner select-none touch-none border-4 transition-colors ${gameMode === 'kill' ? 'bg-[#c15b5b] border-[#a04a4a]' : 'bg-[#dbb06d] border-[#c19a5b]'}`}>
+              <div className="absolute inset-0 opacity-40 pointer-events-none" style={{backgroundImage: 'url("https://www.transparenttextures.com/patterns/wood-pattern.png")'}}></div>
+              <div className="relative z-10">
+                  <div className="grid grid-cols-8 grid-rows-8 w-[260px] h-[260px] sm:w-[360px] sm:h-[360px] border border-black border-opacity-70">
+                      {Array(64).fill(0).map((_, i) => <div key={i} className="border-[0.5px] border-black border-opacity-30 box-border"></div>)}
+                  </div>
+                  <div className="absolute top-0 left-0 w-[260px] h-[260px] sm:w-[360px] sm:h-[360px]">
+                      {board.map((row, r) => row.map((cell, c) => {
+                          const isWinningMove = winningMove && winningMove.r === r && winningMove.c === c;
+                          const isCaptured = capturedStones.some(stone => stone.r === r && stone.c === c);
+                          const isLastMove = lastMove && lastMove.r === r && lastMove.c === c;
 
-        <div className={`relative p-2 sm:p-4 rounded-xl shadow-inner select-none touch-none border-4 transition-colors ${gameMode === 'kill' ? 'bg-[#c15b5b] border-[#a04a4a]' : 'bg-[#dbb06d] border-[#c19a5b]'}`}>
-            <div className="absolute inset-0 opacity-40 pointer-events-none" style={{backgroundImage: 'url("https://www.transparenttextures.com/patterns/wood-pattern.png")'}}></div>
-            <div className="relative z-10">
-                <div className="grid grid-cols-8 grid-rows-8 w-[260px] h-[260px] sm:w-[360px] sm:h-[360px] border border-black border-opacity-70">
-                    {Array(64).fill(0).map((_, i) => <div key={i} className="border-[0.5px] border-black border-opacity-30 box-border"></div>)}
-                </div>
-                <div className="absolute top-0 left-0 w-[260px] h-[260px] sm:w-[360px] sm:h-[360px]">
-                    {board.map((row, r) => row.map((cell, c) => {
-                        const isWinningMove = winningMove && winningMove.r === r && winningMove.c === c;
-                        const isCaptured = capturedStones.some(stone => stone.r === r && stone.c === c);
-                        const isLastMove = lastMove && lastMove.r === r && lastMove.c === c;
+                          return (
+                            <div key={`${r}-${c}`} onClick={() => handleMove(r, c)} className={`absolute flex items-center justify-center ${isGameOver ? 'cursor-default' : 'cursor-pointer'}`}
+                                style={{ top: `${(r / (SIZE - 1)) * 100}%`, left: `${(c / (SIZE - 1)) * 100}%`, width: '11.11%', height: '11.11%', transform: 'translate(-50%, -50%)', zIndex: 20 }}>
+                                
+                                {[[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]].some(p => p[0] === r && p[1] === c) && cell === 0 && <div className="absolute w-1 h-1 bg-black bg-opacity-60 rounded-full"></div>}
+                                
+                                {cell === 0 && !isGameOver && (!playerRole || currentPlayer === playerRole) && <div className={`w-4/5 h-4/5 rounded-full opacity-0 hover:opacity-30 transition-opacity ${currentPlayer === 1 ? 'bg-black' : 'bg-white border'}`}></div>}
+                                
+                                {cell !== 0 && (
+                                  <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in fade-in zoom-in duration-200 
+                                    ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'} 
+                                    ${isWinningMove ? 'ring-4 ring-green-500 shadow-[0_0_15px_rgba(34,197,94,1)] scale-110 z-30' : 
+                                      isLastMove ? 'ring-2 ring-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.8)] z-20' : ''}`}>
+                                  </div>
+                                )}
 
-                        return (
-                          <div key={`${r}-${c}`} onClick={() => handleMove(r, c)} className={`absolute flex items-center justify-center ${isGameOver ? 'cursor-default' : 'cursor-pointer'}`}
-                              style={{ top: `${(r / (SIZE - 1)) * 100}%`, left: `${(c / (SIZE - 1)) * 100}%`, width: '11.11%', height: '11.11%', transform: 'translate(-50%, -50%)', zIndex: 20 }}>
-                              
-                              {/* Board Intersection Dots */}
-                              {[[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]].some(p => p[0] === r && p[1] === c) && cell === 0 && <div className="absolute w-1 h-1 bg-black bg-opacity-60 rounded-full"></div>}
-                              
-                              {/* Hover Indicator */}
-                              {cell === 0 && !isGameOver && (!playerRole || currentPlayer === playerRole) && <div className={`w-4/5 h-4/5 rounded-full opacity-0 hover:opacity-30 transition-opacity ${currentPlayer === 1 ? 'bg-black' : 'bg-white border'}`}></div>}
-                              
-                              {/* Actual Stones */}
-                              {cell !== 0 && (
-                                <div className={`w-[90%] h-[90%] rounded-full shadow-md animate-in fade-in zoom-in duration-200 
-                                  ${cell === 1 ? 'bg-gradient-to-br from-gray-700 to-black' : 'bg-gradient-to-br from-white to-gray-200 border border-gray-300'} 
-                                  ${isWinningMove ? 'ring-4 ring-green-500 shadow-[0_0_15px_rgba(34,197,94,1)] scale-110 z-30' : 
-                                    isLastMove ? 'ring-2 ring-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.8)] z-20' : ''}`}>
-                                </div>
-                              )}
-
-                              {/* Target Marker for KILLED Stones */}
-                              {isGameOver && isCaptured && (
-                                <div className="absolute w-[90%] h-[90%] rounded-full bg-red-500/40 border-2 border-red-500 flex items-center justify-center z-20 animate-in zoom-in">
-                                  <div className="w-2 h-2 bg-red-600 rounded-full shadow-[0_0_10px_rgba(220,38,38,1)]"></div>
-                                </div>
-                              )}
-                          </div>
-                        );
-                    }))}
-                </div>
-            </div>
-        </div>
+                                {isGameOver && isCaptured && (
+                                  <div className="absolute w-[90%] h-[90%] rounded-full bg-red-500/40 border-2 border-red-500 flex items-center justify-center z-20 animate-in zoom-in">
+                                    <div className="w-2 h-2 bg-red-600 rounded-full shadow-[0_0_10px_rgba(220,38,38,1)]"></div>
+                                  </div>
+                                )}
+                            </div>
+                          );
+                      }))}
+                  </div>
+              </div>
+          </div>
+        )}
 
         {/* --- DYNAMIC ACTION AREA --- */}
-        <div className="w-full mt-4 h-[72px] flex items-center justify-center">
-          {isGameOver ? (
-             <div className="w-full h-full bg-white border border-yellow-300 rounded-xl px-4 py-2 shadow-lg flex items-center justify-between animate-in slide-in-from-bottom-2 relative z-10">
+        <div className="w-full mt-4 flex items-center justify-center min-h-[72px]">
+          {gameMode === 'nex' ? (
+             <div className="flex flex-col sm:flex-row w-full gap-2 items-center justify-between">
+                
+                {/* NEX Tools Palette */}
+                <div className="flex bg-white p-1 rounded-xl shadow-sm border border-gray-200 gap-1 w-full sm:w-auto">
+                   <button 
+                     onClick={() => setNexActiveTool(1)} disabled={nexCurrentPlayer !== 1 || isGameOver}
+                     className={`flex-1 sm:w-12 h-10 rounded-lg border-2 flex items-center justify-center transition-all ${nexCurrentPlayer !== 1 ? 'opacity-30 cursor-not-allowed border-transparent' : nexActiveTool === 1 ? 'border-gray-900 shadow-inner bg-gray-100' : 'border-transparent hover:bg-gray-50'}`}
+                     title="Draft Black Stone"
+                   >
+                     <div className="w-5 h-5 rounded-full bg-gray-900 shadow-sm border border-black"></div>
+                   </button>
+                   <button 
+                     onClick={() => setNexActiveTool(2)} disabled={nexCurrentPlayer !== 2 || isGameOver}
+                     className={`flex-1 sm:w-12 h-10 rounded-lg border-2 flex items-center justify-center transition-all ${nexCurrentPlayer !== 2 ? 'opacity-30 cursor-not-allowed border-transparent' : nexActiveTool === 2 ? 'border-gray-400 shadow-inner bg-gray-100' : 'border-transparent hover:bg-gray-50'}`}
+                     title="Draft White Stone"
+                   >
+                     <div className="w-5 h-5 rounded-full bg-white shadow-sm border border-gray-300"></div>
+                   </button>
+                   <button 
+                     onClick={() => setNexActiveTool(3)} disabled={isGameOver}
+                     className={`flex-1 sm:w-12 h-10 rounded-lg border-2 flex items-center justify-center transition-all ${nexActiveTool === 3 ? 'border-indigo-400 shadow-inner bg-indigo-50' : 'border-transparent hover:bg-gray-50'}`}
+                     title="Draft Neutral Stone"
+                   >
+                     <div className="w-5 h-5 rounded-full bg-gray-400 shadow-sm border border-gray-500 flex items-center justify-center"><Hexagon size={12} className="text-white opacity-60"/></div>
+                   </button>
+                </div>
+
+                {/* NEX Actions */}
+                <div className="flex gap-2 w-full sm:w-auto h-10">
+                   {!isGameOver && (
+                     <button onClick={confirmNexTurn} disabled={!nexIsValid} className={`flex-1 sm:px-4 py-2 rounded-xl border flex items-center justify-center transition-all shadow-sm ${nexIsValid ? 'bg-emerald-600 border-emerald-500 text-white hover:bg-emerald-500 hover:scale-105 active:scale-95' : 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'}`}>
+                        <Check size={18} />
+                     </button>
+                   )}
+                   <button onClick={handleNexUndo} disabled={(!nexHasDrafts && nexMoveHistory.length === 0) || isGameOver} className={`flex-1 sm:w-12 py-2 rounded-xl flex items-center justify-center border transition-all shadow-sm ${(!nexHasDrafts && nexMoveHistory.length === 0) || isGameOver ? 'bg-gray-50 border-gray-100 text-gray-300 cursor-not-allowed' : 'bg-white border-gray-200 text-gray-600 hover:border-indigo-400 hover:text-indigo-600 active:scale-95'}`}>
+                      <Undo2 size={16} />
+                   </button>
+                   {/* Instantly triggers resetGame instead of opening the Reset Modal */}
+                   <button onClick={resetGame} className="flex-1 sm:w-12 py-2 rounded-xl flex items-center justify-center bg-red-50 border border-red-100 text-red-600 active:scale-95 transition-all shadow-sm" title="Instant Reset">
+                      <RotateCcw size={16} />
+                   </button>
+                </div>
+             </div>
+          ) : isGameOver ? (
+             <div className="w-full h-[72px] bg-white border border-yellow-300 rounded-xl px-4 py-2 shadow-lg flex items-center justify-between animate-in slide-in-from-bottom-2 relative z-10">
                <div className="flex flex-col flex-1 truncate pr-2">
                  <div className="flex items-center gap-1.5 text-yellow-500 font-black tracking-tighter uppercase text-[10px]">
                    <Trophy size={14} /> {t.gameOverTitle}
@@ -1257,34 +1610,31 @@ export default function App() {
                  <button onClick={handleExitOnline} className="px-3 py-2 bg-gray-100 border border-gray-200 text-gray-600 text-[10px] font-bold rounded-lg hover:bg-gray-200 active:scale-95 transition-all">
                    {t.exitOnline}
                  </button>
-                 {/* Only allow players or the host to restart */}
                  <button onClick={resetGame} disabled={!roomId || (!playerRole && playerRole !== 'spectator')} className="px-3 py-2 bg-green-500 text-white text-[10px] font-black uppercase rounded-lg shadow-md hover:bg-green-600 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none">
                    {t.rematch}
                  </button>
                </div>
              </div>
           ) : playerRole === 'spectator' ? (
-             <div className="flex gap-2 w-full max-w-sm h-full">
+             <div className="flex gap-2 w-full max-w-sm h-[72px]">
                 <div className="flex-1 flex items-center justify-center bg-purple-50 border border-purple-100 rounded-xl text-purple-600 font-bold text-[10px] uppercase tracking-widest gap-2 shadow-sm">
                     <Eye size={16} /> {t.spectating}
                 </div>
-                {/* Spectator/Host keeps admin power to reset a broken match if necessary */}
                 <button onClick={() => setShowResetModal(true)} disabled={!roomId} className="w-16 flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm">
                     <RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span>
                 </button>
              </div>
           ) : (
-            <div className="grid grid-cols-3 gap-2 w-full max-w-sm h-full">
+            <div className="grid grid-cols-3 gap-2 w-full max-w-sm h-[72px]">
                 <button onClick={undoMove} disabled={history.length === 0 || !!roomId} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><Undo2 size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.undoBtn}</span></button>
                 <button onClick={handlePass} disabled={(playerRole && currentPlayer !== playerRole)} className="flex flex-col items-center justify-center py-2 bg-white border border-gray-200 rounded-xl hover:border-blue-500 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><ChevronRight size={14} className="text-gray-600" /><span className="text-[9px] font-black mt-0.5 uppercase">{t.passBtn}</span></button>
-                {/* DISABLED RESET BUTTON FOR ONLINE PLAYERS */}
                 <button onClick={() => setShowResetModal(true)} disabled={!!roomId} className="flex flex-col items-center justify-center py-2 bg-red-50 border border-red-100 rounded-xl text-red-600 disabled:opacity-20 active:scale-95 transition-all shadow-sm"><RotateCcw size={14} /><span className="text-[9px] font-black mt-0.5 uppercase">{t.resetBtn}</span></button>
             </div>
           )}
         </div>
 
         {/* --- IN-GAME CHAT UI (ONLY SHOWS ONLINE) --- */}
-        {roomId && (
+        {roomId && gameMode !== 'nex' && (
           <div className="w-full mt-4 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col h-40 relative z-10 animate-in fade-in duration-300">
             <div className="bg-gray-50 px-3 py-1.5 border-b border-gray-200 flex items-center gap-1.5 text-[10px] font-black uppercase text-gray-500 tracking-wider">
               <MessageSquare size={12} /> Match Chat
@@ -1327,7 +1677,7 @@ export default function App() {
                   }
                 }}
                 placeholder="Type a message..." 
-                maxLength={80} // Restrict length to save database space
+                maxLength={80} 
                 className="flex-1 bg-gray-100 border-none rounded-lg px-3 text-xs focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
               />
               <button type="submit" disabled={!chatInput.trim()} className="bg-indigo-600 text-white p-2 rounded-lg disabled:opacity-50 hover:bg-indigo-700 transition-colors shadow-sm active:scale-95">
