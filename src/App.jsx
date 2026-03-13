@@ -934,16 +934,47 @@ export default function App() {
   }, [isGameOver, playerRole, currentPlayer, board, captures, lastBoardState, passCount, scoreData, t, roomId, syncToCloud, showFlashMessage, playerNames, updateLeaderboard, gameMode]);
 
   const resetGame = useCallback(() => {
-    resetToLocal();
-    showFlashMessage(t.resetNotify);
-    setTimeout(() => setMessage(''), 3000);
+    // 1. If playing NEX, only reset the NEX board
+    if (gameMode === 'nex') {
+      const emptyNex1 = Array(NEX_BOARD_SIZE).fill().map(() => Array(NEX_BOARD_SIZE).fill(0));
+      const emptyNex2 = Array(NEX_BOARD_SIZE).fill().map(() => Array(NEX_BOARD_SIZE).fill(0));
+      setNexBoard(emptyNex1);
+      setNexDraftBoard(emptyNex2);
+      setNexTurn(1);
+      setNexWinner(null);
+      setNexWinningPath(new Set());
+      setNexMoveHistory([]);
+      setIsGameOver(false);
+      showFlashMessage(t.resetNotify);
+      setTimeout(() => setMessage(''), 3000);
+      return;
+    }
+
+    // 2. Prevent unauthorized players from resetting online matches
+    if (roomId && !playerRole && playerRole !== 'spectator') return; 
+
+    // 3. Reset Atari Go Board (Without breaking the Multiplayer Room ID)
+    const emptyBoard = Array(SIZE).fill(null).map(() => Array(SIZE).fill(0));
+    setBoard(emptyBoard);
+    setCurrentPlayer(1);
+    setCaptures({ 1: 0, 2: 0 });
+    setHistory([]);
+    setPassCount(0);
+    setIsGameOver(false);
+    setWinningMove(null);
+    setCapturedStones([]);
+    setLastMove(null);
+    setIsBotThinking(false);
     setShowResetModal(false);
     
+    showFlashMessage(t.resetNotify);
+    setTimeout(() => setMessage(''), 3000);
+    
+    // 4. Wipe the chat from the Firebase DB safely on Rematch
     if (roomId && gameMode !== 'nex') {
-      const emptyBoard = Array(SIZE).fill(null).map(() => Array(SIZE).fill(0));
       syncToCloud(emptyBoard, 1, { 1: 0, 2: 0 }, false, 0, "", null, [], null, true);
     }
-  }, [roomId, t, showFlashMessage, syncToCloud, resetToLocal, gameMode]);
+  }, [roomId, playerRole, t, showFlashMessage, syncToCloud, gameMode]);
 
   const undoMove = useCallback(() => {
     if (history.length === 0 || isGameOver || !!roomId || gameMode === 'nex') return; 
