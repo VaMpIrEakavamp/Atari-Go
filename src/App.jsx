@@ -11,7 +11,7 @@ import {
   createUserWithEmailAndPassword, signOut, updateProfile,
   signInAnonymously, signInWithCustomToken
 } from 'firebase/auth';
-import { getFirestore, doc, onSnapshot, updateDoc, setDoc, getDoc, collection, increment, deleteDoc } from 'firebase/firestore';
+import { getFirestore, doc, onSnapshot, updateDoc, setDoc, getDoc, collection, increment, deleteDoc, runTransaction } from 'firebase/firestore';
 
 /**
  * --- SECURE CONFIGURATION LOADER ---
@@ -502,34 +502,39 @@ export default function App() {
       const joinExistingRoom = async () => {
         try {
           const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', urlRoomId);
-          const snap = await getDoc(roomRef);
-          
-          if (snap.exists()) {
+          let role = null;
+          const name = getPlayerName(user);
+
+          await runTransaction(db, async (tx) => {
+            const snap = await tx.get(roomRef);
+            if (!snap.exists()) throw new Error('room-not-found');
             const data = snap.data();
-            let role = null;
-            const name = getPlayerName(user);
-            
+
             if (data.player1Id === user.uid) {
               role = 1;
             } else if (data.player2Id === user.uid) {
               role = 2;
             } else if (!data.player1Id) {
               role = 1;
-              await updateDoc(roomRef, { player1Id: user.uid, player1Name: name });
+              tx.update(roomRef, { player1Id: user.uid, player1Name: name });
             } else if (!data.player2Id) {
               role = 2;
-              await updateDoc(roomRef, { player2Id: user.uid, player2Name: name });
+              tx.update(roomRef, { player2Id: user.uid, player2Name: name });
             } else {
               role = 'spectator';
             }
-            
-            setRoomId(urlRoomId);
-            setPlayerRole(role);
-            isInitialLoad.current = true;
-          }
+          });
+
+          setRoomId(urlRoomId);
+          setPlayerRole(role);
+          isInitialLoad.current = true;
         } catch (error) {
           console.error("Join Room Error:", error);
-          setDbError("Unable to join room. Please verify your Firestore Database Security Rules.");
+          if (error.message === 'room-not-found') {
+            setDbError("Room not found. The link may be invalid or the room was closed.");
+          } else {
+            setDbError("Unable to join room. Please verify your Firestore Database Security Rules.");
+          }
         }
       };
       joinExistingRoom();
@@ -634,19 +639,19 @@ export default function App() {
             }
           }
 
-          setBoard(JSON.parse(data.board));
+          try { setBoard(JSON.parse(data.board)); } catch { /* keep current board on bad data */ }
           setCurrentPlayer(data.currentPlayer);
           setCaptures(data.captures);
           setIsGameOver(data.isGameOver);
           setGameMode(data.gameMode);
           setPassCount(data.passCount);
-          setLastMove(data.lastMove ? JSON.parse(data.lastMove) : null);
-          setWinningMove(data.winningMove ? JSON.parse(data.winningMove) : null);
-          setCapturedStones(data.capturedStones ? JSON.parse(data.capturedStones) : []);
-          
+          try { setLastMove(data.lastMove ? JSON.parse(data.lastMove) : null); } catch { setLastMove(null); }
+          try { setWinningMove(data.winningMove ? JSON.parse(data.winningMove) : null); } catch { setWinningMove(null); }
+          try { setCapturedStones(data.capturedStones ? JSON.parse(data.capturedStones) : []); } catch { setCapturedStones([]); }
+
           if (data.message) showFlashMessage(data.message);
-          
-          setChatMessages(data.chatMessages ? JSON.parse(data.chatMessages) : []);
+
+          try { setChatMessages(data.chatMessages ? JSON.parse(data.chatMessages) : []); } catch { setChatMessages([]); }
         }
       } else {
         resetToLocal("The room was closed.");
@@ -717,21 +722,12 @@ export default function App() {
     if (!user || !db) return;
     const lbRef = doc(db, 'artifacts', appId, 'public', 'data', 'leaderboard', user.uid);
     try {
-      const snap = await getDoc(lbRef);
-      if (snap.exists()) {
-        await updateDoc(lbRef, {
-          [mode + 'Wins']: increment(1),
-          totalWins: increment(1),
-          displayName: getPlayerName(user)
-        });
-      } else {
-        await setDoc(lbRef, {
-          displayName: getPlayerName(user),
-          classicWins: mode === 'classic' ? 1 : 0,
-          killWins: mode === 'kill' ? 1 : 0,
-          totalWins: 1
-        });
-      }
+      await setDoc(lbRef, {
+        displayName: getPlayerName(user),
+        classicWins: mode === 'classic' ? increment(1) : increment(0),
+        killWins: mode === 'kill' ? increment(1) : increment(0),
+        totalWins: increment(1)
+      }, { merge: true });
     } catch (e) {
       console.error("Failed to update leaderboard rank:", e);
     }
@@ -760,7 +756,11 @@ export default function App() {
       await updateDoc(roomRef, payload);
     } catch (e) {
       console.error("Cloud sync failed", e);
-      setDbError("Move not saved! Database write permission denied.");
+      if (e.code === 'permission-denied') {
+        setDbError("Move not saved! Database write permission denied.");
+      } else {
+        setDbError("Move not saved! Check your connection and try again.");
+      }
     }
   }, [roomId, user, gameMode, db]);
 
@@ -1063,19 +1063,31 @@ export default function App() {
   const handleAuth = async (e) => {
     e.preventDefault();
     if (!auth) return;
+    if (authMode === 'signup' && !authForm.username.trim()) {
+      setAuthErrorMsg('Username cannot be empty.');
+      return;
+    }
     setAuthLoading(true);
     setAuthErrorMsg('');
     try {
       if (authMode === 'signup') {
         const cred = await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
-        await updateProfile(cred.user, { displayName: authForm.username });
-        setUser({ ...cred.user, displayName: authForm.username }); 
+        await updateProfile(cred.user, { displayName: authForm.username.trim() });
+        setUser({ ...cred.user, displayName: authForm.username.trim() });
       } else {
         await signInWithEmailAndPassword(auth, authForm.email, authForm.password);
       }
-      setIsAuthModalOpen(false); 
+      setIsAuthModalOpen(false);
     } catch (err) {
-      setAuthErrorMsg(t.authError);
+      const authErrors = {
+        'auth/email-already-in-use': 'Email already in use.',
+        'auth/wrong-password': 'Incorrect password.',
+        'auth/invalid-credential': 'Incorrect email or password.',
+        'auth/user-not-found': 'No account with that email.',
+        'auth/weak-password': 'Password must be at least 6 characters.',
+        'auth/invalid-email': 'Invalid email address.',
+      };
+      setAuthErrorMsg(authErrors[err.code] || t.authError);
     } finally {
       setAuthLoading(false);
     }
@@ -1204,7 +1216,8 @@ export default function App() {
 
   const handleSendChat = async (e) => {
     e.preventDefault();
-    if (!chatInput.trim() || !roomId || !user || !db) return;
+    const MAX_CHAT_LENGTH = 200;
+    if (!chatInput.trim() || chatInput.trim().length > MAX_CHAT_LENGTH || !roomId || !user || !db) return;
     
     const newMsg = {
       id: Date.now(),
